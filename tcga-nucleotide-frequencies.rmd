@@ -1,0 +1,208 @@
+---
+title: "Most Common Mutations in Each Cancer Type (and Pan Cancer)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+BiocManager::install("PoisonAlien/TCGAmutations")
+library(TCGAmutations)
+```
+
+
+```{r load-mutations}
+library(dplyr)
+library(tidyverse)
+
+cancer_data <- as.data.frame(tcga_available())
+cancer_dfs <- tibble(
+  cancer_name = character(),
+  data = list()
+)
+
+cancer_dfs_facet <- tibble(
+  cancer_name = character(),
+  data = list()
+)
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  # Load TCGA mutation data
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  cancer_name <- gsub("_", " ", cancer_data$Study_Name[i])
+  mutations <- tcgaLoad(study = cancer_type)
+  mutation_data <- as.data.frame(mutations@data)
+  nucleotide_changes <- mutation_data[, c("Hugo_Symbol", "HGVSc")]
+
+  tumor_samples <- mutation_data[, c("Tumor_Sample_Barcode")]
+
+  num_tumors <- length(unique(tumor_samples))
+
+  # group_by HGVSc and add frequency using mutate, then ungroup
+  df <- nucleotide_changes %>%
+    group_by(HGVSc) %>%
+    mutate(freq = n()) %>%
+    ungroup()
+
+  # sort in descending order, distinct removes duplicate rows
+  df_sorted <- df %>%
+    arrange(desc(freq)) %>%
+    distinct(HGVSc, .keep_all = TRUE)
+
+  # Merge gene name and HGVSc into one column
+  df_merged <- df_sorted %>%
+    mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
+    select(mutation, freq) %>%
+    mutate(cancer_name_internal = cancer_name)
+
+
+  df_merged_trunc <- df_merged[1:50, ]
+  df_merged_trunc_facet <- df_merged[1:20, ]
+
+  # Convert the mutation column to a factor
+  df_merged_trunc$mutation <- factor(df_merged_trunc$mutation, levels = df_merged$mutation)
+  df_merged_trunc$freq <- df_merged_trunc$freq / num_tumors
+
+  df_merged_trunc_facet$mutation <- factor(df_merged_trunc_facet$mutation, levels = df_merged$mutation)
+  df_merged_trunc_facet$freq <- df_merged_trunc_facet$freq / num_tumors
+
+  # append dfs to list
+  cancer_dfs <- cancer_dfs %>% add_row(cancer_name, data = list(df_merged_trunc))
+  cancer_dfs_facet <- cancer_dfs_facet %>% add_row(cancer_name, data = list(df_merged_trunc_facet))
+}
+```
+
+```{r plot-graphs, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+library(ggplot2)
+library(purrr)
+library(gridExtra)
+
+# Create the bar plot
+create_plot <- function(df, name) {
+  ggplot(data = df, aes(x = mutation, y = freq)) + # nolint: object_usage_linter.
+    geom_bar(stat = "identity", fill = "blue") +
+    geom_text(aes(label = round(freq, 3)), size = 3.5, hjust = 1.2, color = "white") +
+    coord_flip() +
+    labs(x = "Mutation", y = "Frequency", title = paste("Frequency of Mutations in ", name, sep = "")) +
+    theme_minimal()
+}
+
+plots <- pmap(cancer_dfs, function(cancer_name, data) {
+  create_plot(data, cancer_name)
+})
+
+plots
+```
+
+```{r mod-df-for-facet}
+print(cancer_dfs_facet$data[3])
+# print(cancer_dfs_facet$cancer_name)
+```
+
+```{r plot-facets, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+library(tidyverse)
+
+# Split df into 4 because too big for one facet plot
+cancer_types <- unique(cancer_dfs_facet$cancer_name)
+plots_per_group <- 4
+n_groups <- ceiling(length(cancer_types) / plots_per_group)
+group_assignments <- rep(1:n_groups, each = plots_per_group)[seq_along(cancer_types)]
+cancer_type_groups <- split(cancer_types, group_assignments)
+
+create_facet_plot <- function(df_data, cancer_types_subset) {
+  subset_data <- df_data %>% filter(cancer_name %in% cancer_types_subset) # nolint: object_usage_linter.
+
+  list_of_tibbles <- subset_data$data
+  combined_data <- bind_rows(list_of_tibbles)
+
+  # Create plot
+  ggplot(combined_data, aes(x = mutation, y = freq)) + # nolint: object_usage_linter.
+    geom_bar(stat = "identity", fill = "blue") +
+    geom_text(aes(label = round(freq, 3)), size = 3.5, hjust = 1.2, color = "white") +
+    coord_flip() +
+    labs(x = "Mutation", y = "Frequency") +
+    facet_wrap(~cancer_name_internal, scales = "free") +
+    theme_minimal()
+}
+
+# Create facet plots for each group of cancer types
+facet_plots <- lapply(cancer_type_groups, function(cancer_types_subset) {
+  create_facet_plot(cancer_dfs_facet, cancer_types_subset)
+})
+
+
+for (i in seq_along(facet_plots)) {
+  print(facet_plots[[i]])
+}
+```
+
+
+```{r pan-cancer-data}
+# Get all cancer types
+cancer_types <- unique(cancer_data$Study_Abbreviation)
+
+# Function to load mutations individually because TCGAmutations does not support loading all
+load_mutations <- function(cancer_type) {
+  mutations <- tcgaLoad(study = cancer_type) # nolint: object_usage_linter.
+  mutation_data <- as.data.frame(mutations@data)
+  mutation_data$cancer_type <- cancer_type
+  return(mutation_data)
+}
+
+pan_cancer_list <- lapply(cancer_types, load_mutations)
+
+pan_cancer_df <- bind_rows(pan_cancer_list)
+```
+
+```{r clean-pan-cancer-data}
+head(pan_cancer_df)
+nucleotide_changes <- pan_cancer_df[, c("Hugo_Symbol", "HGVSc", "cancer_type")]
+
+tumor_samples <- pan_cancer_df[, c("Tumor_Sample_Barcode")]
+
+num_tumors <- length(unique(tumor_samples))
+print(length(tumor_samples))
+print(num_tumors)
+
+# group_by HGVSc and add frequency using mutate, then ungroup
+df <- nucleotide_changes %>%
+  group_by(HGVSc) %>%
+  mutate(freq = n()) %>%
+  ungroup()
+
+# sort in descending order, distinct removes duplicate rows
+df_sorted <- df %>%
+  arrange(desc(freq)) %>%
+  distinct(HGVSc, .keep_all = TRUE)
+
+# Merge gene name and HGVSc into one column
+df_merged <- df_sorted %>%
+  mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
+  select(mutation, freq, cancer_type)
+
+df_merged_trunc <- df_merged[1:50, ]
+
+# Convert the mutation column to a factor
+df_merged_trunc$mutation <- factor(df_merged_trunc$mutation, levels = df_merged$mutation)
+df_merged_trunc$freq <- df_merged_trunc$freq / num_tumors
+
+df_merged_trunc
+```
+
+```{r plot-pan-cancer, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+pancan_plot <- ggplot(data = df_merged_trunc, aes(x = mutation, y = freq)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  geom_text(aes(label = round(freq, 3)), size = 3.5, hjust = 1.2, color = "white") +
+  coord_flip() +
+  labs(x = "Mutation", y = "Frequency", title = "Pan-cancer Frequency of Mutations") +
+  theme_minimal()
+
+pancan_plot
+```
