@@ -60,17 +60,18 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   df_merged <- df_sorted %>%
     mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
     select(mutation, freq) %>%
-    mutate(cancer_name_internal = cancer_name)
-
+    mutate(cancer_name_internal = cancer_name) %>%
+    mutate(cancer_type = cancer_type)
 
   df_merged_trunc <- df_merged[1:50, ]
-  df_merged_trunc_facet <- df_merged[1:20, ]
+  df_merged_trunc_facet <- df_merged[1:10, ]
+
+  df_merged_trunc <- df_merged_trunc %>% mutate(mutation = str_trunc(mutation, 20))
+  df_merged_trunc_facet <- df_merged_trunc_facet %>% mutate(mutation = str_trunc(mutation, 20))
 
   # Convert the mutation column to a factor
-  df_merged_trunc$mutation <- factor(df_merged_trunc$mutation, levels = df_merged$mutation)
   df_merged_trunc$freq <- df_merged_trunc$freq / num_tumors
 
-  df_merged_trunc_facet$mutation <- factor(df_merged_trunc_facet$mutation, levels = df_merged$mutation)
   df_merged_trunc_facet$freq <- df_merged_trunc_facet$freq / num_tumors
 
   # append dfs to list
@@ -102,7 +103,8 @@ plots
 ```
 
 ```{r mod-df-for-facet}
-print(cancer_dfs_facet$data[3])
+print(cancer_dfs_facet$data[28])
+# long_mutations <- cancer_dfs_facet$data[]
 # print(cancer_dfs_facet$cancer_name)
 ```
 
@@ -111,7 +113,7 @@ library(tidyverse)
 
 # Split df into 4 because too big for one facet plot
 cancer_types <- unique(cancer_dfs_facet$cancer_name)
-plots_per_group <- 4
+plots_per_group <- 12
 n_groups <- ceiling(length(cancer_types) / plots_per_group)
 group_assignments <- rep(1:n_groups, each = plots_per_group)[seq_along(cancer_types)]
 cancer_type_groups <- split(cancer_types, group_assignments)
@@ -124,12 +126,13 @@ create_facet_plot <- function(df_data, cancer_types_subset) {
 
   # Create plot
   ggplot(combined_data, aes(x = mutation, y = freq)) + # nolint: object_usage_linter.
-    geom_bar(stat = "identity", fill = "blue") +
+    geom_bar(stat = "identity", fill = "blue", width = 0.9) +
     geom_text(aes(label = round(freq, 3)), size = 3.5, hjust = 1.2, color = "white") +
     coord_flip() +
     labs(x = "Mutation", y = "Frequency") +
     facet_wrap(~cancer_name_internal, scales = "free") +
-    theme_minimal()
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 15))
 }
 
 # Create facet plots for each group of cancer types
@@ -141,6 +144,40 @@ facet_plots <- lapply(cancer_type_groups, function(cancer_types_subset) {
 for (i in seq_along(facet_plots)) {
   print(facet_plots[[i]])
 }
+```
+
+```{r plot-one-facet, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+library(tidytext)
+
+list_of_tibbles <- cancer_dfs_facet$data
+combined_data <- bind_rows(list_of_tibbles)
+combined_data[, mutation := factor(mutation, levels = mutation[order(freq)])]
+
+combined_data[, n = .N, by = .(gene = tstrsplit(mutation, split = ",")[[1]])]
+
+library(data.table)
+test <- as.data.table(combined_data)
+test[, gene := tstrsplit(mutation, split = ",")[[1]]]
+test[, .(n = .N, mean_freq = mean(freq)), by = gene][order(-n)][1:10]
+test[, n := .N, by = gene]
+test[, .(n = .N, mean_freq = mean(freq)), by = gene]
+
+# Create plot
+one_plot <- ggplot(combined_data, aes(x = reorder_within(mutation, freq, cancer_type), y = freq)) + # nolint: object_usage_linter.
+  geom_bar(stat = "identity", fill = "blue", width = 0.9) +
+  coord_flip() +
+  labs(x = "Mutation", y = "Frequency") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+  ) +
+  facet_wrap(~cancer_type, scales = "free_y")
+pdf("plot.pdf")
+
+one_plot
+dev.off()
 ```
 
 
