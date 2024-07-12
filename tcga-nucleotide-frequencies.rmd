@@ -102,14 +102,9 @@ plots <- pmap(cancer_dfs, function(cancer_name, data) {
 plots
 ```
 
-```{r mod-df-for-facet}
-print(cancer_dfs_facet$data[28])
-# long_mutations <- cancer_dfs_facet$data[]
-# print(cancer_dfs_facet$cancer_name)
-```
-
 ```{r plot-facets, fig.width=20, fig.height=14, out.width='100%', dpi=150}
 library(tidyverse)
+library(glue)
 
 # Split df into 4 because too big for one facet plot
 cancer_types <- unique(cancer_dfs_facet$cancer_name)
@@ -125,14 +120,18 @@ create_facet_plot <- function(df_data, cancer_types_subset) {
   combined_data <- bind_rows(list_of_tibbles)
 
   # Create plot
-  ggplot(combined_data, aes(x = mutation, y = freq)) + # nolint: object_usage_linter.
+  ggplot(combined_data, aes(x = reorder_within(mutation, freq, cancer_type), y = freq)) + # nolint: object_usage_linter.
     geom_bar(stat = "identity", fill = "blue", width = 0.9) +
-    geom_text(aes(label = round(freq, 3)), size = 3.5, hjust = 1.2, color = "white") +
+    geom_text(aes(label = round(freq, 3)), size = 1.5, hjust = 1.2, color = "white") +
     coord_flip() +
     labs(x = "Mutation", y = "Frequency") +
-    facet_wrap(~cancer_name_internal, scales = "free") +
+    facet_wrap(~cancer_type, scales = "free") +
     theme_minimal() +
-    theme(axis.text.y = element_text(size = 15))
+    scale_x_reordered() +
+    theme(
+      axis.text.y = element_text(size = 7),
+      axis.text.x = element_text(size = 5)
+    )
 }
 
 # Create facet plots for each group of cancer types
@@ -142,8 +141,12 @@ facet_plots <- lapply(cancer_type_groups, function(cancer_types_subset) {
 
 
 for (i in seq_along(facet_plots)) {
+  pdf(glue("plots/facet_{i}.pdf"))
   print(facet_plots[[i]])
+  dev.off()
 }
+
+print(facet_plots[[i]])
 ```
 
 ```{r plot-one-facet, fig.width=20, fig.height=14, out.width='100%', dpi=150}
@@ -151,20 +154,10 @@ library(tidytext)
 
 list_of_tibbles <- cancer_dfs_facet$data
 combined_data <- bind_rows(list_of_tibbles)
-combined_data[, mutation := factor(mutation, levels = mutation[order(freq)])]
-
-combined_data[, n = .N, by = .(gene = tstrsplit(mutation, split = ",")[[1]])]
-
-library(data.table)
-test <- as.data.table(combined_data)
-test[, gene := tstrsplit(mutation, split = ",")[[1]]]
-test[, .(n = .N, mean_freq = mean(freq)), by = gene][order(-n)][1:10]
-test[, n := .N, by = gene]
-test[, .(n = .N, mean_freq = mean(freq)), by = gene]
 
 # Create plot
 one_plot <- ggplot(combined_data, aes(x = reorder_within(mutation, freq, cancer_type), y = freq)) + # nolint: object_usage_linter.
-  geom_bar(stat = "identity", fill = "blue", width = 0.9) +
+  geom_bar(stat = "identity", fill = "blue", width = 0.7) +
   coord_flip() +
   labs(x = "Mutation", y = "Frequency") +
   theme_minimal() +
@@ -172,14 +165,61 @@ one_plot <- ggplot(combined_data, aes(x = reorder_within(mutation, freq, cancer_
     axis.text.y = element_blank(),
     axis.ticks.x = element_blank(),
     axis.ticks.y = element_blank(),
+    panel.grid.major.y = element_blank()
   ) +
   facet_wrap(~cancer_type, scales = "free_y")
-pdf("plot.pdf")
+pdf("plots/one_plot.pdf")
 
 one_plot
 dev.off()
 ```
 
+```{r top_ten}
+library(tidytext)
+library(data.table)
+
+list_of_tibbles <- cancer_dfs_facet$data
+combined_data <- bind_rows(list_of_tibbles)
+
+# # Make dt with top ten most frequent genes
+all_dt <- as.data.table(combined_data)
+all_dt[, gene := tstrsplit(mutation, split = ",")[[1]]]
+
+top_num <- 10
+
+topten <- all_dt[, .(n = .N, mean_freq = mean(freq)), by = gene][order(-n)][1:top_num]
+
+# Generate colors
+color_pal <- rainbow(10)
+
+topten <- topten[, bar_color := color_pal]
+
+all_dt[, bar_color := ifelse(gene %in% topten$gene, gene, "No")]
+
+color_pal <- append(color_pal, "#ffffffef")
+
+# Create plot
+top_ten_oneplot <- ggplot(all_dt, aes(x = reorder_within(mutation, freq, cancer_type), y = freq, fill = bar_color)) + # nolint: object_usage_linter.
+  geom_bar(stat = "identity", width = 0.7) +
+  coord_flip() +
+  labs(x = "Mutation", y = "Frequency") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.title = element_blank(),
+  ) +
+  facet_wrap(~cancer_type, scales = "free_y") +
+  scale_fill_manual(values = color_pal, breaks = c(topten$gene))
+
+
+pdf("plots/top_ten_oneplot.pdf")
+
+top_ten_oneplot
+dev.off()
+```
 
 ```{r pan-cancer-data}
 # Get all cancer types
@@ -240,6 +280,4 @@ pancan_plot <- ggplot(data = df_merged_trunc, aes(x = mutation, y = freq)) +
   coord_flip() +
   labs(x = "Mutation", y = "Frequency", title = "Pan-cancer Frequency of Mutations") +
   theme_minimal()
-
-pancan_plot
 ```
