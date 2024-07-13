@@ -223,6 +223,8 @@ dev.off()
 ```
 
 ```{r summary-stats}
+top_num <- 10
+
 all_topten <- data.table(mutation = character(), n = integer())
 all_unique_patient_data <- data.table(patient = character(), mutations = list())
 
@@ -272,6 +274,17 @@ fraction_pie <- ggplot(grouped_data, aes(x = "", y = count, fill = group)) +
 pdf("plots/fraction_covered_pie.pdf")
 
 fraction_pie
+dev.off()
+
+cumulative_freq_plot <- ggplot(patient_hits, aes(hits, y = 1 - after_stat(y))) +
+  stat_ecdf(geom = "step", color = "purple", linewidth = 1) +
+  labs(x = "Number of Hits", y = "%") +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), labels = seq(0, 100, 10)) +
+  scale_x_continuous(breaks = seq(0, max(patient_hits$hits), 1)) +
+  theme_minimal()
+
+pdf("plots/cumulative_freq_plot.pdf")
+cumulative_freq_plot
 dev.off()
 ```
 
