@@ -47,7 +47,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 
   # group_by HGVSc and add frequency using mutate, then ungroup
   df <- nucleotide_changes %>%
-    group_by(HGVSc) %>%
+    mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
+    group_by(mutation) %>%
     mutate(freq = n()) %>%
     ungroup()
 
@@ -58,7 +59,6 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 
   # Merge gene name and HGVSc into one column
   df_merged <- df_sorted %>%
-    mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
     select(mutation, freq) %>%
     mutate(cancer_name_internal = cancer_name) %>%
     mutate(cancer_type = cancer_type)
@@ -104,6 +104,7 @@ plots
 
 ```{r plot-facets, fig.width=20, fig.height=14, out.width='100%', dpi=150}
 library(tidyverse)
+library(tidytext)
 library(glue)
 
 # Split df into 4 because too big for one facet plot
@@ -221,6 +222,59 @@ top_ten_oneplot
 dev.off()
 ```
 
+```{r summary-stats}
+all_topten <- data.table(mutation = character(), n = integer())
+all_unique_patient_data <- data.table(patient = character(), mutations = list())
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  test_mutations <- tcga_load(study = cancer_type)
+  test_data <- as.data.table(test_mutations@data)
+  patient_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+
+  # Add patient and mutation columns
+  patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "))]
+
+  topten_nucleotides <- patient_mutation[, .(n = .N), by = mutation][order(-n)][1:top_num]
+
+  all_topten <- rbind(all_topten, topten_nucleotides)
+
+  # Group mutations into list per unique patient + count number of mutations per patient
+  unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
+
+  all_unique_patient_data <- rbind(all_unique_patient_data, unique_patient_data)
+}
+
+# Make mutations unique
+all_topten <- all_topten[, .(n = sum(n)), by = mutation][order(-n)]
+
+# Find hits
+patient_hits <- all_unique_patient_data[, hits := sapply(mutations, function(x) length(intersect(x, all_topten$mutation)))][order(-hits)]
+
+fraction_covered <- patient_hits[hits > 0, .N] / patient_hits[, .N]
+
+grouped_data <- patient_hits[, .(count = .N), by = .(hits > 0)]
+
+grouped_data[, group := ifelse(hits == TRUE, "Hit", "No Hit")]
+grouped_data[, prop := count / sum(count) * 100]
+# grouped_data[, ypos := sum(count) * (.I - 1) - count / 2]
+grouped_data[, ypos := -((cumsum(count) - 0.5 * count) - sum(count))]
+grouped_data[order(-count)]
+
+fraction_pie <- ggplot(grouped_data, aes(x = "", y = count, fill = group)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "none") +
+  geom_text(aes(y = ypos, label = paste0(group, "\n", round(prop, 1), "%")), color = "black", size = 6) +
+  scale_fill_manual(values = c("Hit" = "#73daff", "No Hit" = "#ff6961"))
+
+pdf("plots/fraction_covered_pie.pdf")
+
+fraction_pie
+dev.off()
+```
+
 ```{r pan-cancer-data}
 # Get all cancer types
 cancer_types <- unique(cancer_data$Study_Abbreviation)
@@ -238,6 +292,7 @@ pan_cancer_list <- lapply(cancer_types, load_mutations)
 pan_cancer_df <- bind_rows(pan_cancer_list)
 ```
 
+
 ```{r clean-pan-cancer-data}
 head(pan_cancer_df)
 nucleotide_changes <- pan_cancer_df[, c("Hugo_Symbol", "HGVSc", "cancer_type")]
@@ -245,12 +300,11 @@ nucleotide_changes <- pan_cancer_df[, c("Hugo_Symbol", "HGVSc", "cancer_type")]
 tumor_samples <- pan_cancer_df[, c("Tumor_Sample_Barcode")]
 
 num_tumors <- length(unique(tumor_samples))
-print(length(tumor_samples))
-print(num_tumors)
 
 # group_by HGVSc and add frequency using mutate, then ungroup
 df <- nucleotide_changes %>%
-  group_by(HGVSc) %>%
+  mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
+  group_by(mutation) %>%
   mutate(freq = n()) %>%
   ungroup()
 
@@ -261,7 +315,6 @@ df_sorted <- df %>%
 
 # Merge gene name and HGVSc into one column
 df_merged <- df_sorted %>%
-  mutate(mutation = paste(Hugo_Symbol, HGVSc, sep = ", ")) %>%
   select(mutation, freq, cancer_type)
 
 df_merged_trunc <- df_merged[1:50, ]
@@ -280,4 +333,9 @@ pancan_plot <- ggplot(data = df_merged_trunc, aes(x = mutation, y = freq)) +
   coord_flip() +
   labs(x = "Mutation", y = "Frequency", title = "Pan-cancer Frequency of Mutations") +
   theme_minimal()
+
+pdf("plots/pancan_plot.pdf")
+
+pancan_plot
+dev.off()
 ```
