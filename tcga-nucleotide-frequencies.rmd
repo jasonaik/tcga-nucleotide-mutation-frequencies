@@ -223,9 +223,11 @@ dev.off()
 ```
 
 ```{r summary-stats}
-top_num <- 10
+top_nums <- c(10, 20, 50, 100)
 
-all_topten <- data.table(mutation = character(), n = integer())
+top_nums_minus_first <- top_nums[-1]
+
+all_tops <- data.table(mutation = character(), n = integer(), top_number = integer())
 all_unique_patient_data <- data.table(patient = character(), mutations = list())
 
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
@@ -237,9 +239,13 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   # Add patient and mutation columns
   patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "))]
 
-  topten_nucleotides <- patient_mutation[, .(n = .N), by = mutation][order(-n)][1:top_num]
+  for (num in top_nums) {
+    topten_nucleotides <- patient_mutation[, .(n = .N, top_number = num), by = mutation][order(-n)][1:num]
 
-  all_topten <- rbind(all_topten, topten_nucleotides)
+    all_tops <- rbind(all_tops, topten_nucleotides)
+  }
+
+  all_tops <- rbind(all_tops, topten_nucleotides)
 
   # Group mutations into list per unique patient + count number of mutations per patient
   unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
@@ -248,44 +254,76 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 # Make mutations unique
-all_topten <- all_topten[, .(n = sum(n)), by = mutation][order(-n)]
+all_tops_unique <- all_tops[, .(n = sum(n)), by = .(mutation, top_number)][order(-n)]
 
-# Find hits
-patient_hits <- all_unique_patient_data[, hits := sapply(mutations, function(x) length(intersect(x, all_topten$mutation)))][order(-hits)]
+# Duplicate mutations for each top_number
+patient_data_all <- all_unique_patient_data[, top_number := 10]
 
-fraction_covered <- patient_hits[hits > 0, .N] / patient_hits[, .N]
+patient_data_expanded <- patient_data_all[rep(seq_len(.N), each = 4)]
 
-grouped_data <- patient_hits[, .(count = .N), by = .(hits > 0)]
+topnum_assignment <- rep(c(patient_data_all$top_number[1], top_nums_minus_first), length.out = nrow(patient_data_expanded))
 
-grouped_data[, group := ifelse(hits == TRUE, "Hit", "No Hit")]
-grouped_data[, prop := count / sum(count) * 100]
+patient_data_expanded[, top_number := topnum_assignment][order(patient)]
 
-grouped_data[, ypos := -((cumsum(count) - 0.5 * count) - sum(count))]
-grouped_data[order(-count)]
+# # Find hits - this is the next step to change
+# patient_hits <- patient_data_expanded[, hits := sapply(mutations, function(x) length(intersect(x, all_topten$mutation)))][order(-hits)]
 
-fraction_pie <- ggplot(grouped_data, aes(x = "", y = count, fill = group)) +
-  geom_bar(stat = "identity", width = 1) +
-  coord_polar("y", start = 0) +
-  theme_void() +
-  theme(legend.position = "none") +
-  geom_text(aes(y = ypos, label = paste0(group, "\n", round(prop, 1), "%")), color = "black", size = 6) +
-  scale_fill_manual(values = c("Hit" = "#73daff", "No Hit" = "#ff6961"))
+patient_hits <- data.table(patient = character(), mutations = list(), top_number = numeric(), hits = integer())
+pan_can_fractions <- numeric(length(top_nums))
 
-pdf("plots/fraction_covered_pie.pdf")
+for (i in seq_along(top_nums)) {
+  num <- top_nums[i]
 
-fraction_pie
-dev.off()
+  subset_tops <- all_tops_unique[top_number == num]
+  # Calculate hits for the current top_number
+  current_patient_hits <- patient_data_expanded[top_number == num, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, subset_tops$mutation)))
+  )]
 
-cumulative_freq_plot <- ggplot(patient_hits, aes(hits, y = 1 - after_stat(y))) +
-  stat_ecdf(geom = "step", color = "purple", linewidth = 1) +
-  labs(x = "Number of Hits", y = "%") +
-  scale_y_continuous(breaks = seq(0, 1, 0.1), labels = seq(0, 100, 10)) +
-  scale_x_continuous(breaks = seq(0, max(patient_hits$hits), 1)) +
-  theme_minimal()
+  # Calculate fraction_covered for current_patient_hits
+  pan_can_fractions[i] <- current_patient_hits[hits > 0, .N] / current_patient_hits[, .N]
 
-pdf("plots/cumulative_freq_plot.pdf")
-cumulative_freq_plot
-dev.off()
+  # # Make master list, why do i need this again?
+  # patient_hits <- rbind(patient_hits, current_patient_hits)
+}
+
+
+
+# # This is for a pie chart and cumulative frequency plot, only suitable for one top number
+# grouped_data <- patient_hits[, .(count = .N), by = .(hits > 0)]
+
+# grouped_data[, group := ifelse(hits == TRUE, "Hit", "No Hit")]
+# grouped_data[, prop := count / sum(count) * 100]
+
+# grouped_data[, ypos := -((cumsum(count) - 0.5 * count) - sum(count))]
+# grouped_data[order(-count)]
+
+# fraction_pie <- ggplot(grouped_data, aes(x = "", y = count, fill = group)) +
+#   geom_bar(stat = "identity", width = 1) +
+#   coord_polar("y", start = 0) +
+#   theme_void() +
+#   theme(legend.position = "none") +
+#   geom_text(aes(y = ypos, label = paste0(group, "\n", round(prop, 1), "%")), color = "black", size = 6) +
+#   scale_fill_manual(values = c("Hit" = "#73daff", "No Hit" = "#ff6961"))
+
+# pdf("plots/fraction_covered_pie.pdf")
+
+# fraction_pie
+# dev.off()
+
+# cumulative_freq_plot <- ggplot(patient_hits, aes(hits, y = 1 - after_stat(y))) +
+#   stat_ecdf(geom = "step", color = "purple", linewidth = 1) +
+#   labs(x = "Number of Hits", y = "%") +
+#   scale_y_continuous(breaks = seq(0, 1, 0.1), labels = seq(0, 100, 10)) +
+#   scale_x_continuous(breaks = seq(0, max(patient_hits$hits), 1)) +
+#   theme_minimal()
+
+# pdf("plots/cumulative_freq_plot.pdf")
+# cumulative_freq_plot
+# dev.off()
 
 
 # Coverage per cancer type
@@ -324,7 +362,7 @@ coverage_per_cancer$cancer_type <- factor(coverage_per_cancer$cancer_type,
 
 coverage_per_cancer[order(-coverage)]
 
-coverage_per_cancer_plot <- ggplot(coverage_per_cancer, aes(x = cancer_type, y = coverage)) +
+coverage_per_cancer_plot <- ggplot(coverage_per_cancer, aes(x = cancer_type, y = coverage, fill = top)) +
   geom_bar(stat = "identity", fill = "blue", width = 0.9) +
   labs(x = "Cancer Type", y = "Percentage Coverage") +
   theme_minimal() +
