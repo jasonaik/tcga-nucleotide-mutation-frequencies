@@ -55,9 +55,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   # sort in descending order, distinct removes duplicate rows
   df_sorted <- df %>%
     arrange(desc(freq)) %>%
-    distinct(HGVSc, .keep_all = TRUE)
+    distinct(mutation, .keep_all = TRUE)
 
-  # Merge gene name and HGVSc into one column
   df_merged <- df_sorted %>%
     select(mutation, freq) %>%
     mutate(cancer_name_internal = cancer_name) %>%
@@ -222,8 +221,15 @@ top_ten_oneplot
 dev.off()
 ```
 
+```{r add_tert}
+# Liver HCC 53/317
+```
+
 ```{r summary-stats}
 library(viridis)
+library(tidytext)
+library(data.table)
+library(tidyverse)
 
 cancer_data <- as.data.frame(tcga_available())
 
@@ -234,6 +240,8 @@ top_nums_minus_first <- top_nums[-1]
 all_tops <- data.table(mutation = character(), n = integer(), top_number = integer())
 all_unique_patient_data <- data.table(patient = character(), mutations = list())
 
+coverage_within_cancer_type <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
+
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
   cancer_type <- cancer_data$Study_Abbreviation[i]
   test_mutations <- tcga_load(study = cancer_type)
@@ -243,19 +251,51 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   # Add patient and mutation columns
   patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "))]
 
-  for (num in top_nums) {
-    topten_nucleotides <- patient_mutation[, .(n = .N, top_number = num), by = mutation][order(-n)][1:num]
-
-    all_tops <- rbind(all_tops, topten_nucleotides)
-  }
-
-  all_tops <- rbind(all_tops, topten_nucleotides)
-
   # Group mutations into list per unique patient + count number of mutations per patient
   unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
 
+  for (num in top_nums) {
+    top_nucleotides <- patient_mutation[, .(n = .N, top_number = num), by = mutation][order(-n)][1:num]
+
+    within_cancer_patient_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, top_nucleotides$mutation)))
+    )]
+
+    more_than_zero <- within_cancer_patient_hits[hits > 0, .N] / within_cancer_patient_hits[, .N] * 100
+
+    new_row <- data.table(cancer_type = cancer_type, coverage = more_than_zero, top_number = num)
+
+    coverage_within_cancer_type <- rbind(coverage_within_cancer_type, new_row)
+
+    all_tops <- rbind(all_tops, top_nucleotides)
+  }
+
   all_unique_patient_data <- rbind(all_unique_patient_data, unique_patient_data)
 }
+
+coverage_within_cancer_type <- coverage_within_cancer_type[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+coverage_within_cancer_type[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+coverage_within_cancer_type[, top_number := factor(top_number, levels = unique(top_number))]
+
+coverage_within_cancer_plot <- ggplot(coverage_within_cancer_type, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100))
+
+
+pdf("plots/coverage_within_cancer_types_plot.pdf")
+coverage_within_cancer_plot
+dev.off()
 
 # Make mutations unique
 all_tops_unique <- all_tops[, .(n = sum(n)), by = .(mutation, top_number)][order(-n)]
@@ -344,19 +384,23 @@ reversed_viridis_colors <- rev(viridis(num_levels))
 
 coverage_per_cancer_plot <- ggplot(coverage_per_cancer, aes(x = cancer_type, y = coverage, fill = top_number)) +
   geom_bar(stat = "identity", position = "identity", width = 0.9) +
-  labs(x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  labs(title = "Percentage Coverage Pan-Can Panel", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
   theme_minimal() +
   theme(
     axis.text.y = element_text(size = 7),
     axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
   ) +
-  scale_fill_manual(values = reversed_viridis_colors)
+  scale_fill_manual(values = reversed_viridis_colors) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100))
 
 
 pdf("plots/coverage_per_cancer_plot.pdf")
 coverage_per_cancer_plot
 dev.off()
+```
 
+
+```{r pie_chart}
 # # Create plot
 # ggplot(combined_data, aes(x = reorder_within(mutation, freq, cancer_type), y = freq)) + # nolint: object_usage_linter.
 #   geom_bar(stat = "identity", fill = "blue", width = 0.9) +
@@ -424,7 +468,6 @@ pan_cancer_df <- bind_rows(pan_cancer_list)
 
 
 ```{r clean-pan-cancer-data}
-head(pan_cancer_df)
 nucleotide_changes <- pan_cancer_df[, c("Hugo_Symbol", "HGVSc", "cancer_type")]
 
 tumor_samples <- pan_cancer_df[, c("Tumor_Sample_Barcode")]
@@ -441,9 +484,8 @@ df <- nucleotide_changes %>%
 # sort in descending order, distinct removes duplicate rows
 df_sorted <- df %>%
   arrange(desc(freq)) %>%
-  distinct(HGVSc, .keep_all = TRUE)
+  distinct(mutation, .keep_all = TRUE)
 
-# Merge gene name and HGVSc into one column
 df_merged <- df_sorted %>%
   select(mutation, freq, cancer_type)
 
@@ -453,7 +495,94 @@ df_merged_trunc <- df_merged[1:50, ]
 df_merged_trunc$mutation <- factor(df_merged_trunc$mutation, levels = df_merged$mutation)
 df_merged_trunc$freq <- df_merged_trunc$freq / num_tumors
 
-df_merged_trunc
+
+
+
+all_mutations <- as.data.table(select(df_merged, mutation, freq))
+
+patient_hits <- data.table(patient = character(), mutations = list(), top_number = numeric(), hits = integer())
+pan_can_fractions <- numeric(length(top_nums))
+
+for (i in seq_along(top_nums)) {
+  num <- top_nums[i]
+
+  current_top <- all_mutations[order(-freq)][1:num]
+
+  # Calculate hits for the current top_number
+  current_patient_hits <- all_unique_patient_data[, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, current_top$mutation)))
+  )]
+
+  # Calculate fraction_covered for current_patient_hits
+  pan_can_fractions[i] <- current_patient_hits[hits > 0, .N] / current_patient_hits[, .N] * 100
+}
+
+
+pan_can_tops <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
+
+# append pan_cancer
+pan_can_row <- data.table(cancer_type = "PAN-CAN", coverage = pan_can_fractions, top_number = top_nums)
+pan_can_tops <- rbind(pan_can_tops, pan_can_row)
+
+top_nums <- c(10, 20, 50, 100)
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  test_mutations <- tcga_load(study = cancer_type)
+  test_data <- as.data.table(test_mutations@data)
+  patient_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+
+  # Add patient and mutation columns
+  patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "))]
+
+  # Group mutations into list per unique patient + count number of mutations per patient
+  unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
+
+
+  for (num in top_nums) {
+    current_top <- all_mutations[order(-freq)][1:num]
+
+    per_cancer_patient_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_top$mutation)))
+    )]
+    more_than_zero <- per_cancer_patient_hits[hits > 0, .N] / per_cancer_patient_hits[, .N] * 100
+
+    new_row <- data.table(cancer_type = cancer_type, coverage = more_than_zero, top_number = num)
+
+    pan_can_tops <- rbind(pan_can_tops, new_row)
+  }
+}
+
+pan_can_tops <- pan_can_tops[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+pan_can_tops[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+pan_can_tops[, top_number := factor(top_number, levels = unique(top_number))]
+
+num_levels <- length(unique(pan_can_tops$top_number))
+reversed_viridis_colors <- rev(viridis(num_levels))
+
+coverage_within_cancer_plot <- ggplot(pan_can_tops, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Pan-Can Panel Coverage", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_manual(values = reversed_viridis_colors)
+
+
+pdf("plots/pan-can_panel_coverage.pdf")
+coverage_within_cancer_plot
+dev.off()
 ```
 
 ```{r plot-pan-cancer, fig.width=20, fig.height=14, out.width='100%', dpi=150}
@@ -467,5 +596,230 @@ pancan_plot <- ggplot(data = df_merged_trunc, aes(x = mutation, y = freq)) +
 pdf("plots/pancan_plot.pdf")
 
 pancan_plot
+dev.off()
+```
+
+
+```{r debug}
+# Coverage within cancer types
+cancer_data <- as.data.frame(tcga_available())
+
+top_nums <- c(10, 20, 50, 100)
+
+top_nums_minus_first <- top_nums[-1]
+
+all_tops <- data.table(mutation = character(), n = integer(), top_number = integer())
+all_unique_patient_data <- data.table(patient = character(), mutations = list())
+
+coverage_within_cancer_type <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
+
+
+cancer_type <- "UCEC"
+test_mutations <- tcga_load(study = cancer_type)
+test_data <- as.data.table(test_mutations@data)
+patient_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+
+# Add patient and mutation columns
+patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "))]
+
+# Group mutations into list per unique patient + count number of mutations per patient
+unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
+
+for (num in top_nums) {
+  top_nucleotides <- patient_mutation[, .(n = .N, top_number = num), by = mutation][order(-n)][1:num]
+
+  within_cancer_patient_hits <- unique_patient_data[, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, top_nucleotides$mutation)))
+  )]
+
+  more_than_zero <- within_cancer_patient_hits[, sum(hits)] / within_cancer_patient_hits[, .N] * 100
+
+  new_row <- data.table(cancer_type = cancer_type, coverage = more_than_zero, top_number = num)
+
+  coverage_within_cancer_type <- rbind(coverage_within_cancer_type, new_row)
+
+  all_tops <- rbind(all_tops, top_nucleotides)
+}
+
+# pan-can panel
+all_mutations <- data.table(mutation = character(), n = integer())
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  # Load TCGA mutation data
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  cancer_name <- gsub("_", " ", cancer_data$Study_Name[i])
+  mutations <- tcgaLoad(study = cancer_type)
+  mutation_data <- as.data.table(mutations@data)
+  nucleotide_changes <- mutation_data[, c("Hugo_Symbol", "HGVSc")]
+
+  nucleotide_changes[, mutation := paste(Hugo_Symbol, HGVSc, sep = ", ")]
+  mutation_counts <- nucleotide_changes[, .(n = .N), by = mutation]
+
+  all_mutations <- rbind(all_mutations, mutation_counts)
+}
+
+all_mutations <- all_mutations[, .(n = sum(n)), by = mutation][order(-n)]
+
+patient_hits <- data.table(patient = character(), mutations = list(), top_number = numeric(), hits = integer())
+pan_can_fractions <- numeric(length(top_nums))
+
+for (i in seq_along(top_nums)) {
+  num <- top_nums[i]
+
+  current_top <- all_mutations[order(-n)][1:num]
+
+  # Calculate hits for the current top_number
+  current_patient_hits <- unique_patient_data[, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, current_top$mutation)))
+  )]
+
+  # Calculate fraction_covered for current_patient_hits
+  pan_can_fractions[i] <- current_patient_hits[, sum(hits)] / current_patient_hits[, .N]
+}
+
+
+pan_can_tops <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
+
+# append pan_cancer
+pan_can_row <- data.table(cancer_type = "UCEC-pan", coverage = pan_can_fractions, top_number = top_nums)
+
+
+coverage_within_cancer_type <- rbind(coverage_within_cancer_type, pan_can_row)
+
+coverage_within_cancer_type <- coverage_within_cancer_type[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+coverage_within_cancer_type[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+coverage_within_cancer_type[, top_number := factor(top_number, levels = unique(top_number))]
+
+coverage_within_cancer_plot <- ggplot(coverage_within_cancer_type, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "weird", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  )
+
+
+pdf("plots/coverage_within_cancer_types_ucec.pdf")
+coverage_within_cancer_plot
+dev.off()
+
+
+
+
+density_plot <- ggplot(within_cancer_patient_hits, aes(x = mutation_count)) +
+  geom_density(fill = "#69b3a2", color = "#e9ecef", alpha = 0.8)
+pdf("plots/density.pdf")
+density_plot
+dev.off()
+
+# pan-can panel
+all_mutations <- data.table(mutation = character(), n = integer())
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  # Load TCGA mutation data
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  cancer_name <- gsub("_", " ", cancer_data$Study_Name[i])
+  mutations <- tcgaLoad(study = cancer_type)
+  mutation_data <- as.data.table(mutations@data)
+  nucleotide_changes <- mutation_data[, c("Hugo_Symbol", "HGVSc")]
+
+  nucleotide_changes[, mutation := paste(Hugo_Symbol, HGVSc, sep = ", ")]
+  mutation_counts <- nucleotide_changes[, .(n = .N), by = mutation]
+
+  all_mutations <- rbind(all_mutations, mutation_counts)
+}
+
+all_mutations <- all_mutations[, .(n = sum(n)), by = mutation][order(-n)]
+
+patient_hits <- data.table(patient = character(), mutations = list(), top_number = numeric(), hits = integer())
+pan_can_fractions <- numeric(length(top_nums))
+
+for (i in seq_along(top_nums)) {
+  num <- top_nums[i]
+
+  current_top <- all_mutations[order(-n)][1:num]
+
+  # Calculate hits for the current top_number
+  current_patient_hits <- unique_patient_data[, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, current_top$mutation)))
+  )]
+
+  # Calculate fraction_covered for current_patient_hits
+  pan_can_fractions[i] <- current_patient_hits[hits > 0, .N] / current_patient_hits[, .N] * 100
+}
+
+
+pan_can_tops <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
+
+# append pan_cancer
+pan_can_row <- data.table(cancer_type = "UCEC-pan", coverage = pan_can_fractions, top_number = top_nums)
+pan_can_tops <- rbind(pan_can_tops, pan_can_row)
+
+top_nums <- c(10, 20, 50, 100)
+
+
+cancer_type <- "UCEC"
+test_mutations <- tcga_load(study = cancer_type)
+test_data <- as.data.table(test_mutations@data)
+patient_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+
+# Add patient and mutation columns
+patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "))]
+
+# Group mutations into list per unique patient + count number of mutations per patient
+unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
+
+
+for (num in top_nums) {
+  current_top <- all_mutations[order(-n)][1:num]
+
+  per_cancer_patient_hits <- unique_patient_data[, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, current_top$mutation)))
+  )]
+  more_than_zero <- per_cancer_patient_hits[hits > 0, .N] / per_cancer_patient_hits[, .N] * 100
+
+  new_row <- data.table(cancer_type = cancer_type, coverage = more_than_zero, top_number = num)
+
+  pan_can_tops <- rbind(pan_can_tops, new_row)
+}
+
+pan_can_tops <- pan_can_tops[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+pan_can_tops[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+pan_can_tops[, top_number := factor(top_number, levels = unique(top_number))]
+
+num_levels <- length(unique(pan_can_tops$top_number))
+reversed_viridis_colors <- rev(viridis(num_levels))
+
+coverage_within_cancer_plot <- ggplot(pan_can_tops, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Pan-Can Panel Coverage", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_manual(values = reversed_viridis_colors)
+
+
+pdf("plots/pan-can_panel_ucec.pdf")
+coverage_within_cancer_plot
 dev.off()
 ```
