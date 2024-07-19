@@ -241,6 +241,8 @@ all_tops <- data.table(mutation = character(), n = integer(), top_number = integ
 all_unique_patient_data <- data.table(patient = character(), mutations = list())
 
 coverage_within_cancer_type <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
+hits_within_cancer_type <- data.table(cancer_type = character(), hits = numeric(), frequency_of_hit = numeric(), perc_freq_hit = numeric(), top_number = integer())
+cancer_specific_total_hits <- data.table()
 
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
   cancer_type <- cancer_data$Study_Abbreviation[i]
@@ -264,13 +266,22 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
       hits = sapply(mutations, function(x) length(intersect(x, top_nucleotides$mutation)))
     )]
 
-    more_than_zero <- within_cancer_patient_hits[hits > 0, .N] / within_cancer_patient_hits[, .N] * 100
+    total_num_patients <- within_cancer_patient_hits[, .N]
+
+    more_than_zero <- within_cancer_patient_hits[hits > 0, .N] / total_num_patients * 100
 
     new_row <- data.table(cancer_type = cancer_type, coverage = more_than_zero, top_number = num)
 
     coverage_within_cancer_type <- rbind(coverage_within_cancer_type, new_row)
 
+    cumulated_hits <- within_cancer_patient_hits[, .(frequency_of_hit = .N), by = hits]
+    new_hits <- cumulated_hits[, .(hits, frequency_of_hit, perc_freq_hit = frequency_of_hit / total_num_patients * 100, top_number = num, cancer_type = cancer_type)]
+
+    hits_within_cancer_type <- rbind(hits_within_cancer_type, new_hits)
+
     all_tops <- rbind(all_tops, top_nucleotides)
+
+    cancer_specific_total_hits <- rbind(cancer_specific_total_hits, within_cancer_patient_hits[, cancer_type := cancer_type])
   }
 
   all_unique_patient_data <- rbind(all_unique_patient_data, unique_patient_data)
@@ -527,6 +538,9 @@ pan_can_tops <- data.table(cancer_type = character(), coverage = numeric(), top_
 pan_can_row <- data.table(cancer_type = "PAN-CAN", coverage = pan_can_fractions, top_number = top_nums)
 pan_can_tops <- rbind(pan_can_tops, pan_can_row)
 
+hits_pan_can <- data.table(cancer_type = character(), hits = numeric(), frequency_of_hit = numeric(), perc_freq_hit = numeric(), top_number = integer())
+pancan_total_hits <- data.table()
+
 top_nums <- c(10, 20, 50, 100)
 
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
@@ -551,11 +565,20 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
       top_number = num,
       hits = sapply(mutations, function(x) length(intersect(x, current_top$mutation)))
     )]
-    more_than_zero <- per_cancer_patient_hits[hits > 0, .N] / per_cancer_patient_hits[, .N] * 100
+
+    total_num_patients <- per_cancer_patient_hits[, .N]
+    more_than_zero <- per_cancer_patient_hits[hits > 0, .N] / total_num_patients * 100
 
     new_row <- data.table(cancer_type = cancer_type, coverage = more_than_zero, top_number = num)
 
     pan_can_tops <- rbind(pan_can_tops, new_row)
+
+    cumulated_hits <- per_cancer_patient_hits[, .(frequency_of_hit = .N), by = hits]
+    new_hits <- cumulated_hits[, .(hits, frequency_of_hit, perc_freq_hit = frequency_of_hit / total_num_patients * 100, top_number = num, cancer_type = cancer_type)]
+
+    hits_pan_can <- rbind(hits_pan_can, new_hits)
+
+    pancan_total_hits <- rbind(pancan_total_hits, per_cancer_patient_hits[, cancer_type := cancer_type])
   }
 }
 
@@ -599,6 +622,94 @@ pancan_plot
 dev.off()
 ```
 
+```{r diagnostic-plots}
+# Diagnostic plots - distribution of hits
+library(glue)
+
+for (num in top_nums) {
+  cancer_specific_hits <- hits_within_cancer_type[top_number == num]
+  cancer_specific_hits[, hit_type := "Cancer Specific"]
+  pan_can_hits <- hits_pan_can[top_number == num]
+  pan_can_hits[, hit_type := "Pan-Cancer"]
+
+  current_all_hits <- rbind(cancer_specific_hits, pan_can_hits)
+
+  distribution_plot <- ggplot(current_all_hits, aes(x = hits, y = perc_freq_hit, colour = hit_type, group = hit_type)) +
+    geom_point() +
+    geom_line() +
+    labs(title = glue("Distribution of Hits of Top {num} Mutations"), y = "% Frequency", x = "Number of Hits") +
+    theme_minimal() +
+    theme(
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.title = element_blank(),
+    ) +
+    facet_wrap(~cancer_type, scales = "free_x")
+
+  pdf(glue("plots/diagnostic-plots/hit-distribution-top-{num}.pdf"))
+  print(distribution_plot)
+  dev.off()
+}
+
+# Targeted plots
+targeted_hits_within <- hits_within_cancer_type[cancer_type %in% c("UCEC", "STAD", "LUSC", "BRCA")]
+targeted_hits_pancan <- hits_pan_can[cancer_type %in% c("UCEC", "STAD", "LUSC", "BRCA")]
+for (num in top_nums) {
+  cancer_specific_hits <- targeted_hits_within[top_number == num]
+  cancer_specific_hits[, hit_type := "Cancer Specific"]
+  pan_can_hits <- targeted_hits_pancan[top_number == num]
+  pan_can_hits[, hit_type := "Pan-Cancer"]
+
+  current_all_hits <- rbind(cancer_specific_hits, pan_can_hits)
+
+  distribution_plot <- ggplot(current_all_hits, aes(x = hits, y = perc_freq_hit, colour = hit_type, group = hit_type)) +
+    geom_point() +
+    geom_line() +
+    labs(title = glue("Distribution of Hits of Top {num} Mutations"), y = "% Frequency", x = "Number of Hits") +
+    theme_minimal() +
+    theme(
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.title = element_blank(),
+    ) +
+    facet_wrap(~cancer_type, scales = "free_x")
+
+  pdf(glue("plots/diagnostic-plots/targeted-hit-distribution-top-{num}.pdf"))
+  print(distribution_plot)
+  dev.off()
+}
+
+# Density
+total_targeted_hits_within <- cancer_specific_total_hits[cancer_type %in% c("UCEC", "STAD", "LUSC", "BRCA")]
+total_targeted_hits_pancan <- pancan_total_hits[cancer_type %in% c("UCEC", "STAD", "LUSC", "BRCA")]
+
+for (num in top_nums) {
+  cancer_specific_hits <- total_targeted_hits_within[top_number == num]
+  cancer_specific_hits[, hit_type := "Cancer Specific"]
+  pan_can_hits <- total_targeted_hits_pancan[top_number == num]
+  pan_can_hits[, hit_type := "Pan-Cancer"]
+
+  current_all_hits <- rbind(cancer_specific_hits, pan_can_hits)
+
+  distribution_plot <- ggplot(current_all_hits, aes(x = hits, fill = hit_type, group = hit_type)) +
+    geom_density(alpha = 0.6) +
+    labs(title = glue("Distribution of Hits of Top {num} Mutations"), x = "Number of Hits") +
+    theme_minimal() +
+    theme(
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.title = element_blank(),
+    ) +
+    facet_wrap(~cancer_type, scales = "free")
+
+  pdf(glue("plots/diagnostic-plots/density-hit-distribution-top-{num}.pdf"))
+  print(distribution_plot)
+  dev.off()
+}
+```
 
 ```{r debug}
 # Coverage within cancer types
