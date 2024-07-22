@@ -261,10 +261,16 @@ greedy_panel_curator <- function(patient_data, top_number) {
 
 
 ```{r add_tert}
-# Liver HCC 60%
-# Kidney RCC 5%
-# CNS Medullo 15%
-# Skin-Melanoma 69%
+# Liver HCC 60% - LIHC
+# Kidney RCC 5% - KICH, KIRC
+# Skin-Melanoma 69% - SKCM
+# Head-SCC 33% - HNSC
+# Thy AdenoCA 23% - TGCT
+# Lung SCC 6% - LUSC
+# CNS-GBM 66% - GBM
+# Lung AdenoCA 16% - LUAD
+# Bladder 74% - BLCA
+# Biliary-AdenoCA 9% - CHOL
 ```
 
 ```{r cancer-specific-panel}
@@ -348,13 +354,6 @@ dev.off()
 ```
 
 ```{r pan-cancer-panel}
-# r$> pan_can_tops - shchizer one
-#    cancer_type coverage top_number
-#         <char>    <num>      <num>
-# 1:     PAN-CAN 21.91294         10
-# 2:     PAN-CAN 27.75639         20
-# 3:     PAN-CAN 35.07058         50
-# 4:     PAN-CAN 39.72954        100
 top_nums <- c(10, 20, 50, 100)
 pan_can_coverage <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
 pan_can_panel <- data.table(top_number = integer(), panel = list())
@@ -427,7 +426,6 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
     hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
 
     new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
-    print(new_row)
     pan_can_coverage <- rbind(pan_can_coverage, new_row)
   }
 }
@@ -441,6 +439,9 @@ pan_can_coverage <- pan_can_coverage[order(-coverage, -top_number)]
 pan_can_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
 pan_can_coverage[, top_number := factor(top_number, levels = unique(top_number))]
 
+num_levels <- length(unique(pan_can_tops$top_number))
+reversed_viridis_colors <- rev(viridis(num_levels))
+
 pan_can_panel_plot <- ggplot(pan_can_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
   geom_bar(stat = "identity", position = "identity", width = 0.9) +
   labs(title = "Pan-Can Panel Coverage (Greedy)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
@@ -449,7 +450,8 @@ pan_can_panel_plot <- ggplot(pan_can_coverage, aes(x = cancer_type, y = coverage
     axis.text.y = element_text(size = 7),
     axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
   ) +
-  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100))
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_manual(values = reversed_viridis_colors)
 
 
 pdf("plots/pan-can-panel-coverage-greedy.pdf")
