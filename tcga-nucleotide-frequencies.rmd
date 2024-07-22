@@ -225,6 +225,62 @@ dev.off()
 # Liver HCC 53/317
 ```
 
+```{r greedy-algo}
+greedy_panel_curator <- function(mutation_data, patient_data, top_number) {
+  panel <- data.table(mutation = character())
+  top_mutation <- mutation_data[1]
+  remaining_mutations <- mutation_data[mutation != top_mutation]
+
+  panel <- rbind(panel, top_mutation)
+  for (i in 1:top_number) {
+    # This is wrong, should be the coverage at this moment i.e. coverage of number 1 in the first loop and updated for every loop, may want to include number of unique hits
+    coverage <- patient_data[, sum(sapply(mutations, function(x) top_mutation %in% x))]
+    next_top_mutation <- NA
+    for (mut in remaining_mutations) {
+      # These hits are not unique, make them so that they are unique and compare with the current hits
+      current_coverage <- patient_data[, sum(sapply(mutations, function(x) mut %in% x))]
+
+      if (current_coverage > coverage) {
+        coverage <- current_coverage
+        next_top_mutation <- mut
+      }
+    }
+    remaining_mutations <- remaining_mutations[mutation != next_top_mutation]
+    panel <- rbind(panel, next_top_mutation)
+    # Wait what if I just return the coverage here
+  }
+
+  return(panel)
+}
+```
+
+```{r get-data}
+library(data.table)
+
+cancer_data <- as.data.frame(tcga_available())
+
+patient_data <- data.table()
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  test_mutations <- tcga_load(study = cancer_type)
+  test_data <- as.data.table(test_mutations@data)
+  current_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+  current_data <- current_data[, cancer_type := cancer_type]
+
+  patient_data <- rbind(patient_data, current_data)
+}
+
+# Add patient and mutation columns
+patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+
+# Group mutations into list per unique patient + count number of mutations per patient
+unique_patient_data <- patient_mutation[, .(mutations = list(mutation)), by = patient]
+
+# Generate panel
+greedy_panel_curator(patient_mutation, unique_patient_data, 10)
+```
+
 ```{r summary-stats}
 library(viridis)
 library(tidytext)
