@@ -13,13 +13,25 @@ knitr::opts_chunk$set(
   comment = "#>"
 )
 
+install.packages("BiocManager")
+# BiocManager::install("remotes")
 BiocManager::install("PoisonAlien/TCGAmutations")
+install.packages("viridis")
+install.packages("tidytext")
+install.packages("tidyverse")
+install.packages("dplyr")
+install.packages("data.table")
+install.packages("parallel")
+install.packages("ggplot2")
+
 library(TCGAmutations)
 library(viridis)
 library(tidytext)
 library(tidyverse)
 library(dplyr)
 library(data.table)
+library(parallel)
+library(ggplot2)
 ```
 
 
@@ -228,6 +240,13 @@ dev.off()
 
 
 ```{r greedy-algo}
+library(parallel)
+library(fastmatch)
+
+optimized_setdiff <- function(x, y) {
+  x[!fmatch(x, y, nomatch = 0L)]
+}
+
 greedy_panel_curator <- function(patient_data, top_number) {
   panel <- data.table(number = integer(), panel_mutation = character())
 
@@ -237,26 +256,71 @@ greedy_panel_curator <- function(patient_data, top_number) {
   # Precompute mutation coverage
   mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
 
+  num_cores <- detectCores() - 1
+  setDTthreads(threads = num_cores)
+
   for (i in 1:top_number) {
     if (nrow(mutation_patient_list) == 0) break
 
     # Get the best mutation and its patients
     best_mutation <- mutation_coverage[1]$mutation
     new_panel_row <- data.table(number = i, panel_mutation = best_mutation)
-    panel <- rbind(panel, new_panel_row)
+    panel <- rbind(panel, new_panel_row, use.names = TRUE, fill = TRUE)
     patients_with_best_mutation <- mutation_patient_list[mutation == best_mutation]$patients[[1]]
 
     # Remove the best mutation and patients with this mutation from the list
     mutation_patient_list <- mutation_patient_list[!(mutation == best_mutation)]
-    mutation_patient_list[, patients := lapply(patients, setdiff, y = patients_with_best_mutation)]
-    mutation_patient_list <- mutation_patient_list[lengths(patients) > 0]
+
+    # Use mclapply to remove patients in parallel
+    if (length(patients_with_best_mutation) > 0 && nrow(mutation_patient_list) > 0) {
+      # mutation_patient_list[, patients := lapply(patients, setdiff, y = patients_with_best_mutation)]
+      mutation_patient_list$patients <- mclapply(
+        mutation_patient_list$patients, optimized_setdiff,
+        y = patients_with_best_mutation, mc.cores = num_cores
+      )
+      mutation_patient_list <- mutation_patient_list[lengths(mutation_patient_list$patients) > 0]
+    }
 
     # Update mutation coverage after removing patients
-    mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
+    if (nrow(mutation_patient_list) > 0) {
+      mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
+    }
   }
 
   return(panel)
 }
+
+# greedy_panel_curator <- function(patient_data, top_number) {
+#   panel <- data.table(number = integer(), panel_mutation = character())
+
+#   # Precompute unique patients by mutation for initial specific patients
+#   mutation_patient_list <- patient_data[, .(patients = list(unique(patient))), by = mutation]
+
+#   # Precompute mutation coverage
+#   mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
+
+#   for (i in 1:top_number) {
+#     if (nrow(mutation_patient_list) == 0) break
+
+#     # Get the best mutation and its patients
+#     best_mutation <- mutation_coverage[1]$mutation
+#     new_panel_row <- data.table(number = i, panel_mutation = best_mutation)
+#     panel <- rbind(panel, new_panel_row)
+#     patients_with_best_mutation <- mutation_patient_list[mutation == best_mutation]$patients[[1]]
+
+#     # Remove the best mutation and patients with this mutation from the list
+#     mutation_patient_list <- mutation_patient_list[!(mutation == best_mutation)]
+#     # mutation_patient_list$patients <- mclapply(mutation_patient_list$patients, setdiff, y = patients_with_best_mutation, mc.cores = num_cores_to_use)
+#     # mutation_patient_list <- mutation_patient_list[lengths(mutation_patient_list$patients) > 0]
+#     mutation_patient_list[, patients := lapply(patients, optimized_setdiff, y = patients_with_best_mutation)]
+#     mutation_patient_list <- mutation_patient_list[lengths(patients) > 0]
+
+#     # Update mutation coverage after removing patients
+#     mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
+#   }
+
+#   return(panel)
+# }
 ```
 
 
@@ -331,12 +395,19 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   patient_data <- rbind(patient_data, current_data)
 }
 
-# patient_mutation and cleaned_patient_data are the same i think
 patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
 patient_mutation <- add_tert(patient_mutation, FALSE)
-# cleaned_patient_data <- patient_mutation[, .(mutation, cancer_type), by = patient]
 
 cancer_specific_coverage <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer(), panel = list())
+
+
+# current_cancer_type <- "BRCA"
+# specific_patients <- patient_mutation[cancer_type == current_cancer_type]
+# patient_data_mutation_list <- patient_mutation[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+# unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+# profvis(panel <- greedy_panel_curator(specific_patients, max(top_nums)))
+
 
 # Generate panel - cancer-specific
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
