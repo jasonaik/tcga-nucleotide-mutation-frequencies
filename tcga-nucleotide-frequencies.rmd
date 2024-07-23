@@ -260,7 +260,7 @@ greedy_panel_curator <- function(patient_data, top_number) {
 ```
 
 
-```{r add_tert}
+```{r add-tert}
 # Liver HCC 60% - LIHC
 # Kidney RCC 5% - KICH, KIRC
 # Skin-Melanoma 69% - SKCM
@@ -271,6 +271,43 @@ greedy_panel_curator <- function(patient_data, top_number) {
 # Lung AdenoCA 16% - LUAD
 # Bladder 74% - BLCA
 # Biliary-AdenoCA 9% - CHOL
+
+# MAKE THIS A FUNCTION, RETURN DATA; GIVE THE FUNCTION A SELECTOR FOR NORMAL OR TERT
+
+add_tert <- function(patient_mutation, add_yes) {
+  if (add_yes) {
+    tert_dt <- data.table(
+      cancer_type = c("LIHC", "KICH", "KIRC", "SKCM", "HNSC", "TGCT", "LUSC", "GBM", "LUAD", "BLCA", "CHOL"),
+      fraction = c(0.6, 0.05, 0.05, 0.69, 0.33, 0.23, 0.06, 0.66, 0.16, 0.74, 0.09)
+    )
+
+    # Function to perform the operation for each row
+    process_row <- function(cancer_type, fraction, patient_mutation) {
+      current_unique_patients <- unique(patient_mutation[cancer_type == cancer_type]$patient)
+      num_unique_patients <- length(current_unique_patients)
+      spike_num <- round(num_unique_patients * fraction)
+
+      set.seed(123)
+      lucky_patients <- sample(current_unique_patients, spike_num)
+
+      new_patient_mutation_row <- data.table(patient = lucky_patients, mutation = "TERT, c.1-124C>T", cancer_type = cancer_type)
+      return(new_patient_mutation_row)
+    }
+
+
+    # Apply the function to each row of tert_dt
+    new_patient_mutations <- rbindlist(lapply(seq_len(nrow(tert_dt)), function(i) {
+      process_row(tert_dt$cancer_type[i], tert_dt$fraction[i], patient_mutation)
+    }))
+
+    # Combine the original patient_mutation with the new rows
+    new_patient_mutation <- rbind(patient_mutation, new_patient_mutations)
+
+    return(new_patient_mutation)
+  } else {
+    return(patient_mutation)
+  }
+}
 ```
 
 ```{r cancer-specific-panel}
@@ -294,15 +331,17 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   patient_data <- rbind(patient_data, current_data)
 }
 
+# patient_mutation and cleaned_patient_data are the same i think
 patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
-cleaned_patient_data <- patient_mutation[, .(mutation, cancer_type), by = patient]
+patient_mutation <- add_tert(patient_mutation, FALSE)
+# cleaned_patient_data <- patient_mutation[, .(mutation, cancer_type), by = patient]
 
 cancer_specific_coverage <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer(), panel = list())
 
 # Generate panel - cancer-specific
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
   current_cancer_type <- cancer_data$Study_Abbreviation[i]
-  specific_patients <- cleaned_patient_data[cancer_type == current_cancer_type]
+  specific_patients <- patient_mutation[cancer_type == current_cancer_type]
   patient_data_mutation_list <- patient_mutation[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
   unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
 
@@ -370,6 +409,7 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+patient_mutation <- add_tert(patient_mutation, TRUE)
 cleaned_patient_data <- patient_mutation[, .(mutation, cancer_type), by = patient]
 
 # Generate pan can panel
