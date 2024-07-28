@@ -27,6 +27,7 @@ library(ggplot2)
 library(parallel)
 library(fastmatch)
 library(Rcpp)
+library(RColorBrewer)
 ```
 
 
@@ -235,55 +236,8 @@ dev.off()
 
 
 ```{r greedy-algo}
-library(Rcpp)
-library(RcppArmadillo)
-
-
-sourceCpp("test.cpp")
-
-
-
-optimized_setdiff_reg <- function(x, y) {
-  x[!fmatch(x, y, nomatch = 0L)]
-}
-
-greedy_panel_curator_reg <- function(patient_data, top_number) {
-  panel <- data.table(number = integer(), panel_mutation = character())
-
-  # Precompute unique patients by mutation for initial specific patients
-  mutation_patient_list <- patient_data[, .(patients = list(unique(patient))), by = mutation]
-
-  # Precompute mutation coverage
-  mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
-
-  # could try while
-  # instead for removing, make a column for covered or not
-  # take max instead of ordering
-  # use .N
-  for (i in 1:top_number) {
-    if (nrow(mutation_patient_list) == 0) break
-
-    # Get the best mutation and its patients
-    best_mutation <- mutation_coverage[1]$mutation
-    new_panel_row <- data.table(number = i, panel_mutation = best_mutation)
-    panel <- rbind(panel, new_panel_row)
-    patients_with_best_mutation <- mutation_patient_list[mutation == best_mutation]$patients[[1]]
-
-    # Remove the best mutation and patients with this mutation from the list
-    mutation_patient_list <- mutation_patient_list[!(mutation == best_mutation)]
-
-    mutation_patient_list[, patients := lapply(patients, optimized_setdiff_reg, y = patients_with_best_mutation)]
-    mutation_patient_list <- mutation_patient_list[lengths(patients) > 0]
-
-    # Update mutation coverage after removing patients
-    mutation_coverage <- mutation_patient_list[, .(mutation, count = lengths(patients))][order(-count)]
-  }
-
-  return(panel)
-}
-
-greedy_panel_curator_new <- function(patient_data, top_number) {
-  panel <- data.table(number = integer(), panel_mutation = character())
+greedy_panel_curator <- function(patient_data, top_number) {
+  panel <- data.table()
 
   patient_data[, covered := FALSE]
 
@@ -295,13 +249,13 @@ greedy_panel_curator_new <- function(patient_data, top_number) {
     # Make sure that all patients covered by mutation become TRUE
     best_mutation <- mutation_coverage[count == max(count), mutation[1]]
 
-    num <- num + 1
-    new_panel_row <- data.table(number = num, panel_mutation = best_mutation)
-    panel <- rbind(panel, new_panel_row)
-
     # Note that the patient_data is not unique, i.e. there are multiple instances of the same patient bound to other mutations - find them
-    patients_covered <- patient_data[mutation == best_mutation]$patient
+    patients_covered <- patient_data[mutation == best_mutation, patient]
     patient_data[patient %in% patients_covered, covered := TRUE]
+
+    num <- num + 1
+    new_panel_row <- data.table(number = num, panel_mutation = best_mutation, num_covered = length(patients_covered))
+    panel <- rbind(panel, new_panel_row)
 
     # patient_data[mutation == best_mutation, covered := TRUE]
     mutation_coverage <- patient_data[covered == FALSE, .(count = .N), by = mutation]
@@ -364,7 +318,6 @@ add_tert <- function(patient_mutation, add_yes) {
 ```
 
 ```{r cancer-specific-panel}
-benchmark_results <- microbenchmark()
 library(data.table)
 library(TCGAmutations)
 
@@ -390,16 +343,6 @@ patient_mutation <- add_tert(patient_mutation, FALSE)
 
 cancer_specific_coverage <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer(), panel = list())
 
-
-# current_cancer_type <- "BRCA"
-# specific_patients_raw <- patient_mutation[cancer_type == current_cancer_type]
-# patient_data_mutation_list <- patient_mutation[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
-# unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
-
-# profvis(panel_new <- greedy_panel_curator_new(specific_patients_raw, 100))
-# print(panel_new)
-
-
 # Generate panel - cancer-specific
 for (i in seq_along(cancer_data$Study_Abbreviation)) {
   current_cancer_type <- cancer_data$Study_Abbreviation[i]
@@ -408,8 +351,7 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
 
   # Generate max panel
-  panel <- greedy_panel_curator_new(specific_patients, max(top_nums))
-  print(panel)
+  panel <- greedy_panel_curator(specific_patients, max(top_nums))
 
   for (num in top_nums) {
     current_panel <- panel[number <= num]$panel_mutation
@@ -429,7 +371,7 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   }
 }
 
-fwrite(cancer_specific_coverage, "cancer_specific_coverage.csv")
+write.csv(cancer_specific_coverage, "csv-data/training_cancer_specific_panel.csv", row.names = FALSE)
 
 
 
@@ -472,11 +414,10 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- patient_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
-patient_mutation <- add_tert(patient_mutation, TRUE)
-cleaned_patient_data <- patient_mutation[, .(mutation, cancer_type), by = patient]
+patient_mutation <- add_tert(patient_mutation, FALSE)
 
 # Generate pan can panel
-specific_patients <- copy(cleaned_patient_data)
+specific_patients <- copy(patient_mutation)
 patient_data_mutation_list <- patient_mutation[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
 unique_patient_data <- copy(patient_data_mutation_list)
 
@@ -496,15 +437,13 @@ for (num in top_nums) {
   hit_fraction <- pan_can_hits[hits > 0, .N] / total_num_patients * 100
 
   new_row <- data.table(cancer_type = "PAN-CAN", coverage = hit_fraction, top_number = num)
-  print(new_row)
   pan_can_coverage <- rbind(pan_can_coverage, new_row)
 
   new_panel <- data.table(top_number = num, panel = list(current_panel))
-  print(new_panel)
   pan_can_panel <- rbind(pan_can_panel, new_panel)
 }
 
-fwrite(pan_can_panel, "pan-cancer-panel.csv")
+fwrite(pan_can_panel, "csv-data/pan-cancer-panel.csv")
 
 
 # Get fractions for all cancer types
@@ -533,7 +472,7 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   }
 }
 
-fwrite(pan_can_coverage, "pan_cancer_panel_coverage.csv")
+fwrite(pan_can_coverage, "csv-data/pan_cancer_panel_coverage.csv")
 
 
 pan_can_coverage <- pan_can_coverage[order(-coverage, -top_number)]
@@ -542,7 +481,7 @@ pan_can_coverage <- pan_can_coverage[order(-coverage, -top_number)]
 pan_can_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
 pan_can_coverage[, top_number := factor(top_number, levels = unique(top_number))]
 
-num_levels <- length(unique(pan_can_tops$top_number))
+num_levels <- length(unique(pan_can_coverage$top_number))
 reversed_viridis_colors <- rev(viridis(num_levels))
 
 pan_can_panel_plot <- ggplot(pan_can_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
@@ -557,10 +496,665 @@ pan_can_panel_plot <- ggplot(pan_can_coverage, aes(x = cancer_type, y = coverage
   scale_fill_manual(values = reversed_viridis_colors)
 
 
-pdf("plots/pan-can-panel-coverage-greedy.pdf")
+pdf("plots/pan-can-panel-coverage-greedy-new.pdf")
 pan_can_panel_plot
 dev.off()
 ```
+
+```{r cv-cancer-specific}
+cbind_fill <- function(..., fill = NA) {
+  # Get the list of data tables
+  nm <- list(...)
+
+  # Convert each to a matrix and find the maximum number of rows
+  nm <- lapply(nm, function(x) if (nrow(x) == 0) matrix(fill, 0, ncol(x)) else as.matrix(x))
+  n <- max(sapply(nm, nrow))
+
+  # Fill each matrix with NA if it has fewer rows than the max
+  filled <- lapply(nm, function(x) {
+    if (nrow(x) < n) {
+      fill_matrix <- matrix(fill, n - nrow(x), ncol(x))
+      x <- rbind(x, fill_matrix)
+    }
+    return(x)
+  })
+
+  # Combine the matrices side by side
+  result <- do.call(cbind, filled)
+
+  # Convert back to a data.table
+  return(as.data.table(result))
+}
+
+# Split the dataset
+cancer_data <- as.data.frame(tcga_available())
+
+patient_data <- data.table()
+patient_data_training <- data.table()
+patient_data_test <- data.table()
+top_nums <- c(10, 20, 50, 100)
+top_nums_minus_first <- top_nums[-1]
+set.seed(100)
+
+# Get all mutations and patients
+# for (i in 1) {
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  # cancer_type <- "BRCA"
+  test_mutations <- tcga_load(study = cancer_type)
+  test_data <- as.data.table(test_mutations@data)
+  current_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+  current_data[, cancer_type := cancer_type]
+  current_data <- current_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+
+  patient_data <- rbind(patient_data, current_data)
+
+  unique_patients <- current_data[, unique(patient)]
+  training_patients <- sample(unique_patients, round(length(unique_patients) * 0.7))
+
+  training_data <- current_data[patient %in% training_patients]
+  test_data <- current_data[!patient %in% training_patients]
+
+  patient_data_training <- rbind(patient_data_training, training_data)
+  patient_data_test <- rbind(patient_data_test, test_data)
+}
+
+patient_mutation <- copy(patient_data)
+patient_mutation <- add_tert(patient_mutation, FALSE)
+patient_data_training <- add_tert(patient_data_training, FALSE)
+patient_data_test <- add_tert(patient_data_test, FALSE)
+
+# debug_dt <- data.table()
+# debug_dt <- cbind_fill(debug_dt, patient_data_training, patient_data_test, fill = NA)
+
+patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+
+# Generate panel - cancer-specific
+training_cancer_specific <- data.table()
+panel_coverage <- data.table()
+# for (i in 1) {
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  print(cancer_data$Study_Abbreviation[i])
+  for (run_num in 1:10) {
+    # CHANGE IF YOU WANT TRULY 'RANDOM', FOR REPRODUCIBILITY
+    # set.seed(NULL)
+    set.seed(run_num)
+
+    current_cancer_type <- cancer_data$Study_Abbreviation[i]
+    # current_cancer_type <- "BRCA"
+    specific_patients <- patient_data_training[cancer_type == current_cancer_type]
+
+    # sample 80% of training data
+    unique_specific_patients <- specific_patients[, unique(patient)]
+    eighty_training_patients <- sample(unique_specific_patients, round(length(unique_specific_patients) * 0.8))
+
+    eighty_training_data <- specific_patients[patient %in% eighty_training_patients]
+
+    unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+    unique_patient_data <- unique_patient_data[patient %in% eighty_training_patients]
+
+    # Generate max panel
+    panel <- greedy_panel_curator(eighty_training_data, max(top_nums))
+
+    panel[, cancer_type := current_cancer_type]
+    panel_coverage <- rbind(panel_coverage, panel)
+
+    new_row <- data.table(cancer_type = current_cancer_type, run = run_num, panel = list(panel$panel_mutation))
+
+    training_cancer_specific <- rbind(training_cancer_specific, new_row)
+  }
+}
+
+# debug_dt <- data.table()
+# debug_dt <- cbind_fill(eighty_training_data, patient_data_mutation_list, unique_patient_data, training_cancer_specific, fill = NA)
+panels_minus_one <- panel_coverage[num_covered > 1, .(n = .N), by = .(panel_mutation, cancer_type, number)]
+
+training_data_save <- copy(training_cancer_specific)
+training_data_save$panel <- sapply(training_cancer_specific$panel, function(x) paste(x, collapse = ","))
+write.csv(training_data_save, "csv-data/training_cancer_specific_panel.csv", row.names = FALSE)
+
+
+all_training_dt <- copy(training_cancer_specific)
+
+# Function to calculate unique mutation count for a given num_mutation
+calculate_unique_mutations <- function(data, num_mutation) {
+  only_n_mutations <- data[, .(mutation = unlist(lapply(panel, function(x) head(x, num_mutation)))), by = .(cancer_type, run)]
+  unique_mutation_count <- only_n_mutations[, uniqueN(mutation)]
+  return(unique_mutation_count)
+}
+
+final_panel <- data.table()
+
+for (cancer in unique(all_training_dt$cancer_type)) {
+  current_data <- all_training_dt[cancer_type == cancer]
+  top_mutations <- current_data[, .(mutation = unlist(panel)), by = .(cancer_type, run)]
+  unique_tops <- unique(top_mutations$mutation)
+  if (length(unique_tops) < max(top_nums)) {
+    # Unlist all mutations, merge into one list then make unique
+    new_row <- data.table(cancer_type = cancer, panel = list(unique_tops))
+    final_panel <- rbind(final_panel, new_row, fill = TRUE)
+
+  } else {
+    left <- 0
+    right <- max(top_nums)
+    target <- max(top_nums)
+    current_num <- 0
+    mid <- NA
+
+    while (left <= right) {
+      mid <- left + (right - left) %/% 2
+      current_num <- calculate_unique_mutations(current_data, mid)
+      
+      if (abs(current_num - target) <= 5) {
+        break
+      }
+      
+      if (current_num < target) {
+        left <- mid + 1
+      } else {
+        right <- mid - 1
+      }
+    }
+
+
+    only_n_mutations <- current_data[, panel := lapply(panel, function(x) head(x, mid))]
+    tops <- only_n_mutations[, .(mutation = unlist(panel)), by = .(cancer_type, run)]
+    unique_tops <- unique(tops$mutation)
+
+    new_row <- data.table(cancer_type = cancer, panel = list(unique_tops))
+    final_panel <- rbind(final_panel, new_row, fill = TRUE)
+
+
+  }
+  
+
+}
+
+all_unlisted <- all_training_dt[, .(mutation = unlist(panel)), by = setdiff(names(all_training_dt), "panel")]
+drop <- all_unlisted[, .(cancer_type, mutation)]
+drop_count <- drop[, .(count = .N), by = .(mutation, cancer_type)][order(-count)]
+
+
+final_panel_raw <- drop_count[, head(.SD, 100), by = cancer_type]
+final_panel_raw <- final_panel_raw[, .(panel = list(mutation)), by = cancer_type]
+
+
+# THIS IS FOR UNOPTIMIZED FINAL PANEL (RAW)
+# plot on DISCOVERY SET
+trained_cs_coverage <- data.table()
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  specific_patients <- patient_data_training[cancer_type == current_cancer_type]
+  patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+  panel <- unlist(final_panel_raw[cancer_type == current_cancer_type, panel])
+
+  for (num in top_nums) {
+    current_panel <- panel[1:num]
+
+    cancer_specific_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+    )]
+
+    total_num_patients <- cancer_specific_hits[, .N]
+    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
+
+    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
+  }
+}
+
+trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+
+cancer_specific_panel_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage (Greedy, CV, Discovery, Unoptimized)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set1")
+
+
+pdf("plots/cancer-specific-panel-coverage-greedy-trained-discovery-unoptimized.pdf")
+cancer_specific_panel_plot
+dev.off()
+
+
+
+# Get fractions for all cancer types when tested on TEST SET
+trained_cs_coverage <- data.table()
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  # current_cancer_type <- "BRCA"
+  specific_patients <- patient_data_test[cancer_type == current_cancer_type]
+  patient_data_mutation_list <- patient_data_test[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+  panel <- unlist(final_panel_raw[cancer_type == current_cancer_type, panel])
+
+  for (num in top_nums) {
+    current_panel <- panel[1:num]
+
+    cancer_specific_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+    )]
+
+    total_num_patients <- cancer_specific_hits[, .N]
+    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
+
+    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
+  }
+}
+
+trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+
+cancer_specific_panel_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage (Greedy, CV, Test, Unoptimized)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set2")
+
+
+pdf("plots/cancer-specific-panel-coverage-greedy-trained-unoptimized.pdf")
+cancer_specific_panel_plot
+dev.off()
+
+
+# THIS IS FOR OPTIMIZED PANEL
+# plot on DISCOVERY SET
+trained_cs_coverage <- data.table()
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  specific_patients <- patient_data_training[cancer_type == current_cancer_type]
+  patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+  panel <- unlist(final_panel[cancer_type == current_cancer_type, panel])
+
+  for (num in top_nums) {
+    current_panel <- panel[1:num]
+
+    cancer_specific_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+    )]
+
+    total_num_patients <- cancer_specific_hits[, .N]
+    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
+
+    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
+  }
+}
+
+trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+
+cancer_specific_panel_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage (Greedy, CV, Discovery, Optimized)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set1")
+
+
+pdf("plots/cancer-specific-panel-coverage-greedy-trained-discovery-optimized.pdf")
+cancer_specific_panel_plot
+dev.off()
+
+
+
+# Get fractions for all cancer types when tested on TEST SET
+trained_cs_coverage <- data.table()
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  # current_cancer_type <- "BRCA"
+  specific_patients <- patient_data_test[cancer_type == current_cancer_type]
+  patient_data_mutation_list <- patient_data_test[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+  panel <- unlist(final_panel[cancer_type == current_cancer_type, panel])
+
+  for (num in top_nums) {
+    current_panel <- panel[1:num]
+
+    cancer_specific_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+    )]
+
+    total_num_patients <- cancer_specific_hits[, .N]
+    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
+
+    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
+  }
+}
+
+trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+
+cancer_specific_panel_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage (Greedy, CV, Test, Optimized)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set2")
+
+
+pdf("plots/cancer-specific-panel-coverage-greedy-trained-optimized.pdf")
+cancer_specific_panel_plot
+dev.off()
+```
+
+```{r top-mutations-cross-validation-cancer-specific}
+# Split the dataset
+cancer_data <- as.data.frame(tcga_available())
+
+patient_data <- data.table()
+patient_data_training <- data.table()
+patient_data_test <- data.table()
+top_nums <- c(10, 20, 50, 100)
+top_nums_minus_first <- top_nums[-1]
+set.seed(101)
+
+# Get all mutations and patients
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  test_mutations <- tcga_load(study = cancer_type)
+  test_data <- as.data.table(test_mutations@data)
+  current_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+  current_data[, cancer_type := cancer_type]
+  current_data <- current_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+
+  patient_data <- rbind(patient_data, current_data)
+
+  unique_patients <- current_data[, unique(patient)]
+  training_patients <- sample(unique_patients, round(length(unique_patients) * 0.7))
+
+  training_data <- current_data[patient %in% training_patients]
+  test_data <- current_data[!patient %in% training_patients]
+
+  patient_data_training <- rbind(patient_data_training, training_data)
+  patient_data_test <- rbind(patient_data_test, test_data)
+}
+
+patient_mutation <- copy(patient_data)
+patient_mutation <- add_tert(patient_mutation, FALSE)
+patient_data_training <- add_tert(patient_data_training, FALSE)
+patient_data_test <- add_tert(patient_data_test, FALSE)
+
+
+patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+
+# Generate panel - cancer-specific
+
+top_cv_panel <- data.table()
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  print(cancer_data$Study_Abbreviation[i])
+  for (run_num in 1:10) {
+    set.seed(run_num)
+
+    current_cancer_type <- cancer_data$Study_Abbreviation[i]
+    specific_patients <- patient_data_training[cancer_type == current_cancer_type]
+
+    # sample 80% of training data
+    unique_specific_patients <- specific_patients[, unique(patient)]
+    eighty_training_patients <- sample(unique_specific_patients, round(length(unique_specific_patients) * 0.8))
+
+    eighty_training_data <- specific_patients[patient %in% eighty_training_patients]
+
+    unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+    unique_patient_data <- unique_patient_data[patient %in% eighty_training_patients]
+
+    # Generate top 100 mutations
+    panel <- eighty_training_data[, .(n = .N), by = mutation][order(-n)][1:max(top_nums)]
+
+    # panel <- greedy_panel_curator(eighty_training_data, max(top_nums))
+
+    new_row <- data.table(cancer_type = current_cancer_type, run = run_num, panel = list(panel$mutation))
+
+    top_cv_panel <- rbind(top_cv_panel, new_row)
+  }
+}
+
+all_training_dt <- copy(top_cv_panel)
+
+all_unlisted <- all_training_dt[, .(mutation = unlist(panel)), by = setdiff(names(all_training_dt), "panel")]
+drop <- all_unlisted[, .(cancer_type, mutation)]
+drop_count <- drop[, .(count = .N), by = .(mutation, cancer_type)][order(-count)]
+
+final_panel_raw <- drop_count[, .SD[1:min(100, .N)], by = cancer_type]
+final_panel_raw <- final_panel_raw[, .(panel = list(mutation)), by = cancer_type]
+
+
+# plot on DISCOVERY SET
+trained_cs_coverage <- data.table()
+# for (i in 1:3) {
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+
+  specific_patients <- patient_data_training[cancer_type == current_cancer_type]
+  patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+  panel <- unlist(final_panel_raw[cancer_type == current_cancer_type, panel])
+
+  for (num in top_nums) {
+    current_panel <- panel[1:num]
+
+    cancer_specific_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+    )]
+
+    total_num_patients <- cancer_specific_hits[, .N]
+    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
+
+    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
+  }
+}
+
+trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+
+cancer_specific_panel_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage (Greedy, Trained, Discovery)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set1")
+
+
+pdf("plots/cancer-specific-panel-coverage-tops-trained-discovery.pdf")
+cancer_specific_panel_plot
+dev.off()
+
+
+
+# Get fractions for all cancer types when tested on TEST SET
+trained_cs_coverage <- data.table()
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  # current_cancer_type <- "BRCA"
+  specific_patients <- patient_data_test[cancer_type == current_cancer_type]
+  patient_data_mutation_list <- patient_data_test[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+
+  panel <- unlist(final_panel_raw[cancer_type == current_cancer_type, panel])
+
+  for (num in top_nums) {
+    current_panel <- panel[1:num]
+
+    cancer_specific_hits <- unique_patient_data[, .(
+      patient,
+      mutations,
+      top_number = num,
+      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+    )]
+
+    total_num_patients <- cancer_specific_hits[, .N]
+    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
+
+    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
+  }
+}
+
+trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+
+# Reorder the cancer_type factor based on the coverage
+trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+
+cancer_specific_panel_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Cancer-specific Panel Coverage (Tops, CV)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 7),
+    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set2")
+
+
+pdf("plots/cancer-specific-panel-coverage-tops-trained.pdf")
+cancer_specific_panel_plot
+dev.off()
+```
+
+```{r train-pan-cancer}
+# Split the dataset
+cancer_data <- as.data.frame(tcga_available())
+
+patient_data <- data.table()
+patient_data_training <- data.table()
+patient_data_test <- data.table()
+top_nums <- c(10, 20, 50, 100)
+top_nums_minus_first <- top_nums[-1]
+set.seed(123)
+
+training_pan_can <- data.table()
+
+# Get all mutations and patients
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  cancer_type <- cancer_data$Study_Abbreviation[i]
+  test_mutations <- tcga_load(study = cancer_type)
+  test_data <- as.data.table(test_mutations@data)
+  current_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+  current_data[, cancer_type := cancer_type]
+  current_data <- current_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+
+  patient_data <- rbind(patient_data, current_data)
+
+  unique_patients <- current_data[, unique(patient)]
+  # 70:30 Split
+  training_patients <- sample(unique_patients, round(length(unique_patients) * 0.7))
+
+  training_data <- current_data[patient %in% training_patients]
+  test_data <- current_data[!patient %in% training_patients]
+
+  patient_data_training <- rbind(patient_data_training, training_data)
+  patient_data_test <- rbind(patient_data_test, test_data)
+}
+
+patient_mutation <- copy(patient_data)
+patient_mutation <- add_tert(patient_mutation, FALSE)
+patient_data_training <- add_tert(patient_data_training, FALSE)
+patient_data_test <- add_tert(patient_data_test, FALSE)
+
+# Generate pan can panel
+specific_patients <- copy(patient_mutation)
+
+# sample 80% of training data
+unique_specific_patients <- specific_patients[, unique(patient)]
+eighty_training_patients <- sample(unique_specific_patients, round(length(unique_specific_patients) * 0.8))
+
+eighty_training_data <- specific_patients[patient %in% eighty_training_patients]
+
+
+patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
+unique_patient_data <- copy(patient_data_mutation_list)
+unique_patient_data <- unique_patient_data[patient %in% eighty_training_patients]
+
+panel <- greedy_panel_curator(specific_patients, max(top_nums))
+
+for (num in top_nums) {
+  current_panel <- panel[number <= num]$panel_mutation
+
+  pan_can_hits <- unique_patient_data[, .(
+    patient,
+    mutations,
+    top_number = num,
+    hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
+  )]
+
+  total_num_patients <- pan_can_hits[, .N]
+  hit_fraction <- pan_can_hits[hits > 0, .N] / total_num_patients * 100
+
+  new_row <- data.table(cancer_type = "PAN-CAN", coverage = hit_fraction, top_number = num)
+  pan_can_coverage <- rbind(pan_can_coverage, new_row)
+
+  new_panel <- data.table(top_number = num, panel = list(current_panel))
+  training_pan_can <- rbind(training_pan_can, new_panel)
+}
+
+fwrite(training_pan_can, "csv-data/training_pan_can_coverage.csv")
+```
+
 
 ```{r summary-stats}
 library(viridis)
@@ -1160,13 +1754,15 @@ pdf("plots/coverage_within_cancer_types_ucec.pdf")
 coverage_within_cancer_plot
 dev.off()
 
+patient_mutation_count <- patient_mutation[, .(mutation_count = .N), by = patient][order(mutation_count)]
 
-
-
-density_plot <- ggplot(within_cancer_patient_hits, aes(x = mutation_count)) +
-  geom_density(fill = "#69b3a2", color = "#e9ecef", alpha = 0.8)
-pdf("plots/density.pdf")
-density_plot
+# This is currently only for UCEC
+mutation_histogram <- ggplot(patient_mutation_count, aes(x = mutation_count)) +
+  geom_histogram(fill = "#69b3a2", color = "#e9ecef", alpha = 0.8) +
+  scale_x_log10() +
+  labs(y = "Number of Patients", x = "Mutation Count")
+pdf("plots/mutation_count_histogram.pdf")
+mutation_histogram
 dev.off()
 
 # pan-can panel
@@ -1270,4 +1866,5 @@ coverage_within_cancer_plot <- ggplot(pan_can_tops, aes(x = cancer_type, y = cov
 pdf("plots/pan-can_panel_ucec.pdf")
 coverage_within_cancer_plot
 dev.off()
+
 ```
