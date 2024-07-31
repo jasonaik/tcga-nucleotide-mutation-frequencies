@@ -39,7 +39,6 @@ plot_dir <- file.path("plots", today_date)
 if (!file.exists(plot_dir)) {
   dir.create(plot_dir, recursive = TRUE)
 }
-
 ```
 
 
@@ -338,7 +337,7 @@ add_tert <- function(patient_mutation, add_yes) {
 }
 ```
 
-```{r cbind-fill}
+```{r useful-functions}
 cbind_fill <- function(..., fill = NA) {
   # Get the list of data tables
   nm <- list(...)
@@ -362,12 +361,33 @@ cbind_fill <- function(..., fill = NA) {
   # Convert back to a data.table
   return(as.data.table(result))
 }
+
+prepare_for_cow <- function(plot) {
+  plot + theme(
+    legend.position = "none",
+    axis.title = element_blank(),
+    plot.title = element_text(size = 10),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.y = element_blank()
+  )
+}
+
+round_up_custom <- function(x) {
+  if (x <= 10) {
+    return(10)
+  } else if (x <= 20) {
+    return(20)
+  } else if (x <= 50) {
+    return(50)
+  } else {
+    return(100)
+  }
+}
 ```
 
 ```{r test-and-plot-functions}
 # Cancer specific
 test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_palette, pan_can_yes) {
-
   # Get coverages
   panel_coverage <- data.table()
 
@@ -420,9 +440,9 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
       panel_coverage <- rbind(panel_coverage, new_row)
     }
   }
-  
 
-  # Plot 
+
+  # Plot
   panel_coverage <- panel_coverage[order(-coverage, -top_number)]
 
   panel_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
@@ -450,7 +470,6 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
 
 # Pan-cancer
 test_and_plot_pc <- function(panel, patient_data, plot_title, filename, brewer_palette) {
-
   # Get coverages
   panel_coverage <- data.table()
 
@@ -501,7 +520,7 @@ test_and_plot_pc <- function(panel, patient_data, plot_title, filename, brewer_p
     panel_coverage <- rbind(panel_coverage, new_row)
   }
 
-  # Plot 
+  # Plot
   panel_coverage <- panel_coverage[order(-coverage, -top_number)]
 
   panel_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
@@ -1166,6 +1185,9 @@ cancer_data <- as.data.frame(tcga_available())
 patient_data <- data.table()
 patient_data_training <- data.table()
 patient_data_test <- data.table()
+colormap_genes <- data.table()
+colormap_mutations <- data.table()
+
 top_nums <- c(10, 20, 50, 100)
 top_nums_minus_first <- top_nums[-1]
 set.seed(100)
@@ -1175,9 +1197,16 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   cancer_type <- cancer_data$Study_Abbreviation[i]
   test_mutations <- tcga_load(study = cancer_type)
   test_data <- as.data.table(test_mutations@data)
-  current_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
-  current_data[, cancer_type := cancer_type]
-  current_data <- current_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+  raw_data <- test_data[, c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSc")]
+  raw_data[, cancer_type := cancer_type]
+
+  new_genes <- raw_data[, .(gene = Hugo_Symbol)]
+  colormap_genes <- rbind(colormap_genes, new_genes)
+
+  current_data <- raw_data[, .(patient = tstrsplit(Tumor_Sample_Barcode, "-")[[3]], mutation = paste(Hugo_Symbol, HGVSc, sep = ", "), cancer_type)]
+
+  new_mutations <- current_data[, .(mutation = mutation)]
+  colormap_mutations <- rbind(colormap_mutations, new_mutations)
 
   patient_data <- rbind(patient_data, current_data)
 
@@ -1192,8 +1221,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- copy(patient_data)
-patient_data_training <- add_tert(patient_data_training, TRUE)
-patient_data_test <- add_tert(patient_data_test, TRUE)
+patient_data_training <- add_tert(patient_data_training, FALSE)
+patient_data_test <- add_tert(patient_data_test, FALSE)
 
 
 # Generate pan can panel
@@ -1259,13 +1288,15 @@ drop_count <- drop[, .(count = .N), by = .(mutation, cancer_type)][order(-count)
 final_panel <- drop_count[, .SD[1:min(100, .N)], by = cancer_type]
 final_panel <- final_panel[, .(panel = list(mutation)), by = cancer_type]
 
-cs_dis_plot <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery)", "cs-tops-tert-pluspc-ondis", "Set2", TRUE)
-cs_test_plot <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage (On Test)", "cs-tops-tert-pluspc-ontest", "Set2", TRUE)
+cs_dis_plot <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery)", "cs-tops-pluspc-ondis", "Set2", TRUE)
+cs_test_plot <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage (On Test)", "cs-tops-pluspc-ontest", "Set2", TRUE)
+pan_can_tops_dis_plot <- test_and_plot_pc(final_panel_tops, patient_data_training, "Pan-Cancer Panel (Tops, On Discovery)", "pan-can-tops-cved-ondis", "Set2")
+pan_can_tops_test_plot <- test_and_plot_pc(final_panel_tops, patient_data_test, "Pan-Cancer Panel (Tops, On Test)", "pan-can-tops-cved-ontest", "Set2")
 
 
-## STRANGER DANGER
-cs_dis_plot_nt <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery) No TERT", "cs-tops-tert-pluspc-ondis-no-tert", "Set2", TRUE)
-cs_test_plot_nt <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage (On Test) No TERT", "cs-tops-tert-pluspc-ontest-no-tert", "Set2", TRUE)
+# ## STRANGER DANGER - actually we need both - run code twice probs
+# cs_dis_plot_nt <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery) No TERT", "cs-tops-tert-pluspc-ondis-no-tert", "Set2", TRUE)
+# cs_test_plot_nt <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage (On Test) No TERT", "cs-tops-tert-pluspc-ontest-no-tert", "Set2", TRUE)
 
 
 prepare_for_cow <- function(plot) {
@@ -1275,12 +1306,12 @@ prepare_for_cow <- function(plot) {
     plot.title = element_text(size = 10),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.y = element_blank()
-  ) 
+  )
 }
 
 plot_legend <- get_legend(cs_dis_plot)
 
-plots <- list(cs_dis_plot, cs_dis_plot_nt, cs_test_plot, cs_test_plot_nt)
+plots <- list(cs_dis_plot, pan_can_tops_dis_plot, cs_test_plot, pan_can_tops_test_plot)
 prepared_plots <- lapply(plots, prepare_for_cow)
 
 combined_plots <- plot_grid(
@@ -1288,160 +1319,167 @@ combined_plots <- plot_grid(
   align = "vh", axis = "tb", ncol = 2
 )
 
-# Add the legend to the right side of the combined plots
-pan_can_cow <- plot_grid(
-  combined_plots, plot_legend, 
-  ncol = 2, rel_widths = c(4, 1)
-)
-
 # Create common x and y labels
 y.grob <- textGrob("Percentage Coverage", gp = gpar(fontsize = 15), rot = 90)
 x.grob <- textGrob("Cancer Type", gp = gpar(fontsize = 15))
 
 # Arrange the combined plot and labels
-final_plot_pc <- arrangeGrob(pan_can_cow, left = y.grob, bottom = x.grob)
+final_plot_pc <- arrangeGrob(combined_plots, left = y.grob, bottom = x.grob)
 
-pdf(glue("plots/{Sys.Date()}/pan-can-tops-cowplot-tert-comparison.pdf"), width = 17, height = 8.5)
+pdf(glue("plots/{Sys.Date()}/cs-vs-pc-cow.pdf"), width = 17, height = 8.5)
 grid.draw(final_plot_pc)
 dev.off()
 
 
+# # Prepare for colormap
+# Process genes/mutations
+unique_genes <- colormap_genes[, .(gene = unique(gene))]
+unique_mutations <- colormap_mutations[, .(mutation = unique(mutation))]
+uni_mut <- unique_mutations[, count := 0]
+uni_genes <- unique_genes[, count := 0]
 
-
-# plot on DISCOVERY SET
-trained_cs_coverage <- data.table()
-# for (i in 1:3) {
-for (i in seq_along(cancer_data$Study_Abbreviation)) {
-  current_cancer_type <- cancer_data$Study_Abbreviation[i]
-
-  specific_patients <- patient_data_training[cancer_type == current_cancer_type]
-  patient_data_mutation_list <- patient_data_training[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
-  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
-
-  panel <- unlist(final_panel_raw[cancer_type == current_cancer_type, panel])
-
-  for (num in top_nums) {
-    current_panel <- panel[1:num]
-
-    cancer_specific_hits <- unique_patient_data[, .(
-      patient,
-      mutations,
-      top_number = num,
-      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
-    )]
-
-    total_num_patients <- cancer_specific_hits[, .N]
-    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
-
-    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
-    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
-  }
+for (i in seq_len(nrow(final_panel))) {
+  current_panel <- final_panel$panel[[i]][1:20]
+  uni_mut[mutation %in% current_panel, count := count + 1]
 }
 
-trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
+final_panel_genes <- final_panel[, genes := lapply(panel, function(x) unique(sapply(x, function(y) strsplit(y, ",")[[1]][1])))]
 
-# Reorder the cancer_type factor based on the coverage
-trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
-trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
+for (i in seq_len(nrow(final_panel_genes))) {
+  current_panel <- final_panel_genes$genes[[i]][1:20]
+  uni_genes[gene %in% current_panel, count := count + 1]
+}
 
-cs_tops_dis_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
-  geom_bar(stat = "identity", position = "identity", width = 0.9) +
-  labs(title = "Cancer-specific Panel Coverage (Greedy, Trained, Discovery)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+top_ten_genes <- uni_genes[order(-count)][1:20]
+top_ten_mut <- uni_mut[order(-count)][1:20]
+
+# Check in which top n panel do the genes/muts cover
+
+mutation_panel_hits <- data.table()
+for (i in seq_len(nrow(final_panel))) {
+  current_panel <- final_panel$panel[[i]]
+  current_cancer_type <- final_panel$cancer_type[i]
+  hit <- top_ten_mut[mutation %in% current_panel]
+  new_row <- data.table(mutation = hit$mutation, cancer_type = current_cancer_type, top_number = as.factor(sapply(match(hit$mutation, current_panel), round_up_custom)))
+  mutation_panel_hits <- rbind(mutation_panel_hits, new_row)
+}
+
+missing_ct_mut <- setdiff(final_panel$cancer_type, mutation_panel_hits$cancer_type)
+placeholder_rows_mut <- data.table(mutation = mutation_panel_hits$mutation[1], cancer_type = missing_ct_mut, top_number = NA)
+mutation_panel_hits_complete <- rbind(mutation_panel_hits, placeholder_rows_mut, fill = TRUE)
+
+# This final panel is not unique by design to mimic the top 10 panel
+final_panel_genes_nu <- final_panel[, genes := lapply(panel, function(x) sapply(x, function(y) strsplit(y, ",")[[1]][1]))]
+
+gene_panel_hits <- data.table()
+for (i in seq_len(nrow(final_panel_genes_nu))) {
+  current_panel <- final_panel_genes_nu$genes[[i]]
+  current_cancer_type <- final_panel_genes_nu$cancer_type[i]
+  hit <- top_ten_genes[gene %in% current_panel]
+  new_row <- data.table(gene = hit$gene, cancer_type = current_cancer_type, top_number = as.factor(sapply(match(hit$gene, current_panel), round_up_custom)))
+  gene_panel_hits <- rbind(gene_panel_hits, new_row)
+}
+
+missing_ct_gene <- setdiff(final_panel$cancer_type, gene_panel_hits$cancer_type)
+placeholder_rows_gene <- data.table(gene = gene_panel_hits$gene[1], cancer_type = missing_ct_gene, top_number = NA)
+gene_panel_hits_complete <- rbind(gene_panel_hits, placeholder_rows_gene, fill = TRUE)
+
+# Gene-cancer heatmap
+gene_panel_hits_complete[order(gene)]
+
+gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(gene, cancer_type, fill = top_number)) +
+  geom_tile(color = "white") +
   theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 7),
-    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white") +
+  labs(
+    x = "Cancer Type",
+    y = "Gene"
   ) +
-  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
-  scale_fill_brewer(palette = "Set3")
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 9),
+    axis.text.y = element_text(size = 9),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 15, margin = margin(t = 20)),
+    axis.title.y = element_text(size = 15),
+    title = element_text(size = 15)
+  )
 
-
-pdf("plots/cancer-specific-panel-coverage-tops-trained-discovery.pdf")
-cs_tops_dis_plot
+pdf(glue("plots/{Sys.Date()}/gene-heatmap.pdf"), width = 17, height = 8.5)
+gene_colormap_plot
 dev.off()
 
 
 
-# Get fractions for all cancer types when tested on TEST SET
-trained_cs_coverage <- data.table()
-for (i in seq_along(cancer_data$Study_Abbreviation)) {
-  current_cancer_type <- cancer_data$Study_Abbreviation[i]
-  # current_cancer_type <- "BRCA"
-  specific_patients <- patient_data_test[cancer_type == current_cancer_type]
-  patient_data_mutation_list <- patient_data_test[, .(mutations = list(mutation)), by = .(patient, cancer_type)]
-  unique_patient_data <- patient_data_mutation_list[cancer_type == current_cancer_type]
+# Mutation-cancer heatmap
+mutation_panel_hits_complete[, mutation := gsub(" ", "\n", mutation)]
 
-  panel <- unlist(final_panel_raw[cancer_type == current_cancer_type, panel])
+mutation_panel_hits_complete[order(mutation)]
 
-  for (num in top_nums) {
-    current_panel <- panel[1:num]
-
-    cancer_specific_hits <- unique_patient_data[, .(
-      patient,
-      mutations,
-      top_number = num,
-      hits = sapply(mutations, function(x) length(intersect(x, current_panel)))
-    )]
-
-    total_num_patients <- cancer_specific_hits[, .N]
-    hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
-
-    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
-    trained_cs_coverage <- rbind(trained_cs_coverage, new_row)
-  }
-}
-
-trained_cs_coverage <- trained_cs_coverage[order(-coverage, -top_number)]
-
-# Reorder the cancer_type factor based on the coverage
-trained_cs_coverage[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
-trained_cs_coverage[, top_number := factor(top_number, levels = unique(top_number))]
-
-cs_tops_test_plot <- ggplot(trained_cs_coverage, aes(x = cancer_type, y = coverage, fill = top_number)) +
-  geom_bar(stat = "identity", position = "identity", width = 0.9) +
-  labs(title = "Cancer-specific Panel Coverage (Tops, CV)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(mutation, cancer_type, fill = top_number)) +
+  geom_tile(color = "white") +
   theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 7),
-    axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white") +
+  labs(
+    x = "Cancer Type",
+    y = "Mutations"
   ) +
-  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
-  scale_fill_brewer(palette = "Set3")
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 15, margin = margin(t = 20)),
+    axis.title.y = element_text(size = 15),
+    title = element_text(size = 15),
+  )
 
+pdf(glue("plots/{Sys.Date()}/mutation-heatmap.pdf"), width = 17, height = 8.5)
+mutation_colormap_plot
+dev.off()
 
-pdf("plots/cancer-specific-panel-coverage-tops-trained.pdf")
-cs_tops_test_plot
+# Add the heatmap below the combined plots - GENE
+added_gene_heatmap <- plot_grid(
+  final_plot_pc, gene_colormap_plot,
+  nrow = 2, scale = 0.95
+)
+
+pdf(glue("plots/{Sys.Date()}/bar-and-gene-heat.pdf"), width = 17, height = 17)
+grid.draw(added_gene_heatmap)
 dev.off()
 
 
-cs_tops_dis_plot <- cs_tops_dis_plot + theme(
-  legend.position = "none",
-  axis.title = element_blank(),
-  title = element_blank(),
-  axis.text.y = element_text(size = 5),
-  axis.text.x = element_text(size = 5, angle = 90, vjust = 0.5, hjust = 1)
-)
-cs_tops_test_plot <- cs_tops_test_plot + theme(
-  legend.position = "none",
-  axis.title = element_blank(),
-  title = element_blank(),
-  axis.text.y = element_text(size = 5),
-  axis.text.x = element_text(size = 5, angle = 90, vjust = 0.5, hjust = 1)
+# Add the legend to the right side of the combined plots
+added_legend_gene <- plot_grid(
+  added_gene_heatmap, plot_legend,
+  ncol = 2, rel_widths = c(7, 1), scale = 0.95
 )
 
+pdf(glue("plots/{Sys.Date()}/bar-gene-heat-legend.pdf"), width = 17, height = 17)
+grid.draw(added_legend_gene)
+dev.off()
 
-# Combine using cowplot
-final_vs_plots <- plot_grid(cs_tops_dis_plot, cs_panel_dis_plot, cs_tops_test_plot, cs_panel_test_plot, align = "vh", vjust = 1, scale = 1, labels = "AUTO")
+# Add the heatmap below the combined plots - MUTATION
+added_mutation_heatmap <- plot_grid(
+  final_plot_pc, mutation_colormap_plot,
+  nrow = 2, scale = 0.95
+)
 
-# Create common x and y labels
-y.grob <- textGrob("Percentage Coverage", gp = gpar(fontsize = 10), rot = 90)
-x.grob <- textGrob("Cancer Type", gp = gpar(fontsize = 10))
+pdf(glue("plots/{Sys.Date()}/bar-and-mutation-heat.pdf"), width = 17, height = 17)
+grid.draw(added_mutation_heatmap)
+dev.off()
 
-# Arrange the combined plot and labels
-final_vs_plots <- arrangeGrob(final_vs_plots, left = y.grob, bottom = x.grob)
 
-pdf("plots/opt-vs-tops-cs-panel.pdf")
-grid.draw(final_vs_plots)
+# Add the legend to the right side of the combined plots
+added_legend_mutation <- plot_grid(
+  added_mutation_heatmap, plot_legend,
+  ncol = 2, rel_widths = c(7, 1), scale = 0.95
+)
+
+pdf(glue("plots/{Sys.Date()}/bar-mutation-heat-legend.pdf"), width = 17, height = 17)
+grid.draw(added_legend_mutation)
 dev.off()
 ```
 
@@ -1507,74 +1545,74 @@ for (run_num in 1:10) {
 
   unique_patient_data <- patient_data_mutation_list[patient %in% eighty_training_patients]
 
-  panel <- greedy_panel_curator(eighty_training_data, max(top_nums))
-  new_row <- data.table(run = run_num, panel = list(panel$panel_mutation))
-  training_pan_can <- rbind(training_pan_can, new_row)
+  # panel <- greedy_panel_curator(eighty_training_data, max(top_nums))
+  # new_row <- data.table(run = run_num, panel = list(panel$panel_mutation))
+  # training_pan_can <- rbind(training_pan_can, new_row)
 
   tops_panel <- eighty_training_data[, .(n = .N), by = mutation][order(-n)][1:max(top_nums)]
   new_row <- data.table(run = run_num, panel = list(tops_panel$mutation))
   training_pan_can_tops <- rbind(training_pan_can_tops, new_row)
 }
 
-training_data_save_pc <- copy(training_pan_can)
-training_data_save_pc$panel <- sapply(training_pan_can$panel, function(x) paste(x, collapse = ","))
-write.csv(training_data_save_pc, "csv-data/training_pan_can_panel.csv", row.names = FALSE)
+# training_data_save_pc <- copy(training_pan_can)
+# training_data_save_pc$panel <- sapply(training_pan_can$panel, function(x) paste(x, collapse = ","))
+# write.csv(training_data_save_pc, "csv-data/training_pan_can_panel.csv", row.names = FALSE)
 
-all_training_dt <- copy(training_pan_can)
+all_training_dt <- copy(training_pan_can_tops)
 
-# Function to calculate unique mutation count for a given num_mutation
-calculate_unique_mutations <- function(data, num_mutation) {
-  only_n_mutations <- data[, .(mutation = unlist(lapply(panel, function(x) head(x, num_mutation)))), by = run]
-  unique_mutation_count <- only_n_mutations[, uniqueN(mutation)]
-  return(unique_mutation_count)
-}
+# # Function to calculate unique mutation count for a given num_mutation
+# calculate_unique_mutations <- function(data, num_mutation) {
+#   only_n_mutations <- data[, .(mutation = unlist(lapply(panel, function(x) head(x, num_mutation)))), by = run]
+#   unique_mutation_count <- only_n_mutations[, uniqueN(mutation)]
+#   return(unique_mutation_count)
+# }
 
-final_panel <- data.table()
+# final_panel <- data.table()
 
 current_data <- copy(all_training_dt)
 top_mutations <- all_training_dt[, .(mutation = unlist(panel)), by = run]
 unique_tops <- unique(top_mutations$mutation)
-if (length(unique_tops) < max(top_nums)) {
-  # Unlist all mutations, merge into one list then make unique
-  new_row <- data.table(panel = list(unique_tops))
-  final_panel <- rbind(final_panel, new_row, fill = TRUE)
-} else {
-  left <- 0
-  right <- max(top_nums)
-  target <- max(top_nums)
-  current_num <- 0
-  mid <- NA
+# if (length(unique_tops) < max(top_nums)) {
+#   # Unlist all mutations, merge into one list then make unique
+#   new_row <- data.table(panel = list(unique_tops))
+#   final_panel <- rbind(final_panel, new_row, fill = TRUE)
+# } else {
+#   left <- 0
+#   right <- max(top_nums)
+#   target <- max(top_nums)
+#   current_num <- 0
+#   mid <- NA
 
-  while (left <= right) {
-    mid <- left + (right - left) %/% 2
-    current_num <- calculate_unique_mutations(current_data, mid)
+#   while (left <= right) {
+#     mid <- left + (right - left) %/% 2
+#     current_num <- calculate_unique_mutations(current_data, mid)
 
-    if (abs(current_num - target) <= 5) {
-      break
-    }
+#     if (abs(current_num - target) <= 5) {
+#       break
+#     }
 
-    if (current_num < target) {
-      left <- mid + 1
-    } else {
-      right <- mid - 1
-    }
-  }
+#     if (current_num < target) {
+#       left <- mid + 1
+#     } else {
+#       right <- mid - 1
+#     }
+#   }
 
 
-  only_n_mutations <- current_data[, panel := lapply(panel, function(x) head(x, mid))]
-  tops <- only_n_mutations[, .(mutation = unlist(panel)), by = run]
-  unique_tops <- unique(tops$mutation)
+#   only_n_mutations <- current_data[, panel := lapply(panel, function(x) head(x, mid))]
+#   tops <- only_n_mutations[, .(mutation = unlist(panel)), by = run]
+#   unique_tops <- unique(tops$mutation)
 
-  new_row <- data.table(panel = list(unique_tops))
-  final_panel <- rbind(final_panel, new_row, fill = TRUE)
-}
+#   new_row <- data.table(panel = list(unique_tops))
+#   final_panel <- rbind(final_panel, new_row, fill = TRUE)
+# }
 
-all_unlisted <- all_training_dt[, .(mutation = unlist(panel)), by = setdiff(names(all_training_dt), "panel")]
-drop <- all_unlisted[, .(mutation)]
-drop_count <- drop[, .(count = .N), by = mutation][order(-count)]
+# all_unlisted <- all_training_dt[, .(mutation = unlist(panel)), by = setdiff(names(all_training_dt), "panel")]
+# drop <- all_unlisted[, .(mutation)]
+# drop_count <- drop[, .(count = .N), by = mutation][order(-count)]
 
-final_panel_raw <- drop_count[1:100]
-final_panel_raw <- final_panel_raw[, .(panel = list(mutation))]
+# final_panel_raw <- drop_count[1:100]
+# final_panel_raw <- final_panel_raw[, .(panel = list(mutation))]
 
 tops_unlisted <- training_pan_can_tops[, .(mutation = unlist(panel)), by = setdiff(names(all_training_dt), "panel")]
 droptop <- tops_unlisted[, .(mutation)]
@@ -1582,12 +1620,12 @@ droptop_count <- droptop[, .(count = .N), by = mutation][order(-count)]
 final_panel_tops <- droptop_count[1:100]
 final_panel_tops <- final_panel_tops[, .(panel = list(mutation))]
 
-pan_can_unopt_dis_plot <- test_and_plot_pc(final_panel_raw, patient_data_training, "Pan-Cancer Panel (Greedy, On Discovery)", "pan-can-greedy-cved-ondis", "Set2")
-pan_can_unopt_test_plot <- test_and_plot_pc(final_panel_raw, patient_data_test, "Pan-Cancer Panel (Greedy, On Test)", "pan-can-greedy-cved-ontest", "Set2")
-pan_can_opt_dis_plot <- test_and_plot_pc(final_panel, patient_data_training, "Pan-Cancer Panel (Greedy, On Discovery, Optimized)", "pan-can-greedy-cved-opt-ondis", "Set2")
-pan_can_opt_test_plot <- test_and_plot_pc(final_panel, patient_data_test, "Pan-Cancer Panel (Greedy, On Test, Optimized)", "pan-can-greedy-cved-opt-ontest", "Set2")
-pan_can_tops_dis_plot <- test_and_plot_pc(final_panel_tops, patient_data_training, "Pan-Cancer Panel (Tops, On Discovery)", "pan-can-tops-cved-ondis", "Set2")
-pan_can_tops_test_plot <- test_and_plot_pc(final_panel_tops, patient_data_test, "Pan-Cancer Panel (Tops, On Test)", "pan-can-tops-cved-ontest", "Set2")
+# pan_can_unopt_dis_plot <- test_and_plot_pc(final_panel_raw, patient_data_training, "Pan-Cancer Panel (Greedy, On Discovery)", "pan-can-greedy-cved-ondis", "Set2")
+# pan_can_unopt_test_plot <- test_and_plot_pc(final_panel_raw, patient_data_test, "Pan-Cancer Panel (Greedy, On Test)", "pan-can-greedy-cved-ontest", "Set2")
+# pan_can_opt_dis_plot <- test_and_plot_pc(final_panel, patient_data_training, "Pan-Cancer Panel (Greedy, On Discovery, Optimized)", "pan-can-greedy-cved-opt-ondis", "Set2")
+# pan_can_opt_test_plot <- test_and_plot_pc(final_panel, patient_data_test, "Pan-Cancer Panel (Greedy, On Test, Optimized)", "pan-can-greedy-cved-opt-ontest", "Set2")
+pan_can_tops_dis_plot <- test_and_plot_pc(final_panel_tops, patient_data_training, "Pan-Cancer Panel (On Discovery)", "pan-can-tops-cved-ondis", "Set2")
+pan_can_tops_test_plot <- test_and_plot_pc(final_panel_tops, patient_data_test, "Pan-Cancer Panel (On Test)", "pan-can-tops-cved-ontest", "Set2")
 
 prepare_for_cow <- function(plot) {
   plot + theme(
@@ -1611,7 +1649,7 @@ combined_plots <- plot_grid(
 
 # Add the legend to the right side of the combined plots
 pan_can_cow <- plot_grid(
-  combined_plots, plot_legend, 
+  combined_plots, plot_legend,
   ncol = 2, rel_widths = c(6, 1)
 )
 
