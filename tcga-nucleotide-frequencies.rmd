@@ -32,6 +32,7 @@ library(cowplot)
 library(grid)
 library(gridExtra)
 library(glue)
+library(scales)
 
 today_date <- as.character(Sys.Date())
 plot_dir <- file.path("plots", today_date)
@@ -436,7 +437,7 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
       total_num_patients <- cancer_specific_hits[, .N]
       hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
 
-      new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+      new_row <- data.table(cancer_type = "PANCAN", coverage = hit_fraction, top_number = num)
       panel_coverage <- rbind(panel_coverage, new_row)
     }
   }
@@ -453,8 +454,8 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
     labs(title = plot_title, x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
     theme_minimal() +
     theme(
-      axis.text.y = element_text(size = 7),
-      axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+      axis.text.y = element_text(size = 10),
+      axis.text.x = element_text(size = 10, angle = 90, vjust = 0.35, hjust = 1)
     ) +
     scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
     scale_fill_brewer(palette = brewer_palette)
@@ -463,7 +464,7 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
   print(plot)
   dev.off()
 
-  return(plot)
+  return(list(plot, panel_coverage))
 }
 
 
@@ -516,7 +517,7 @@ test_and_plot_pc <- function(panel, patient_data, plot_title, filename, brewer_p
     total_num_patients <- cancer_specific_hits[, .N]
     hit_fraction <- cancer_specific_hits[hits > 0, .N] / total_num_patients * 100
 
-    new_row <- data.table(cancer_type = current_cancer_type, coverage = hit_fraction, top_number = num)
+    new_row <- data.table(cancer_type = "PANCAN", coverage = hit_fraction, top_number = num)
     panel_coverage <- rbind(panel_coverage, new_row)
   }
 
@@ -768,8 +769,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 
 patient_mutation <- copy(patient_data)
 patient_mutation <- add_tert(patient_mutation, FALSE)
-patient_data_training <- add_tert(patient_data_training, FALSE)
-patient_data_test <- add_tert(patient_data_test, FALSE)
+patient_data_training <- unique(add_tert(patient_data_training, FALSE))
+patient_data_test <- unique(add_tert(patient_data_test, FALSE))
 
 # debug_dt <- data.table()
 # debug_dt <- cbind_fill(debug_dt, patient_data_training, patient_data_test, fill = NA)
@@ -1221,8 +1222,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- copy(patient_data)
-patient_data_training <- add_tert(patient_data_training, FALSE)
-patient_data_test <- add_tert(patient_data_test, FALSE)
+patient_data_training <- unique(add_tert(patient_data_training, FALSE))
+patient_data_test <- unique(add_tert(patient_data_test, FALSE))
 
 
 # Generate pan can panel
@@ -1288,15 +1289,14 @@ drop_count <- drop[, .(count = .N), by = .(mutation, cancer_type)][order(-count)
 final_panel <- drop_count[, .SD[1:min(100, .N)], by = cancer_type]
 final_panel <- final_panel[, .(panel = list(mutation)), by = cancer_type]
 
-cs_dis_plot <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery)", "cs-tops-pluspc-ondis", "Set2", TRUE)
-cs_test_plot <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage (On Test)", "cs-tops-pluspc-ontest", "Set2", TRUE)
+cs_dis <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery)", "cs-tops-pluspc-ondis", "Set2", TRUE)
+cs_test <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage", "cs-tops-pluspc-ontest", "Set2", TRUE)
+cs_dis_plot <- cs_dis[[1]]
+cs_test_plot <- cs_test[[1]]
 pan_can_tops_dis_plot <- test_and_plot_pc(final_panel_tops, patient_data_training, "Pan-Cancer Panel (Tops, On Discovery)", "pan-can-tops-cved-ondis", "Set2")
 pan_can_tops_test_plot <- test_and_plot_pc(final_panel_tops, patient_data_test, "Pan-Cancer Panel (Tops, On Test)", "pan-can-tops-cved-ontest", "Set2")
 
 
-# ## STRANGER DANGER - actually we need both - run code twice probs
-# cs_dis_plot_nt <- test_and_plot_cs(final_panel, patient_data_training, "Cancer Specific Panel Coverage (On Discovery) No TERT", "cs-tops-tert-pluspc-ondis-no-tert", "Set2", TRUE)
-# cs_test_plot_nt <- test_and_plot_cs(final_panel, patient_data_test, "Cancer Specific Panel Coverage (On Test) No TERT", "cs-tops-tert-pluspc-ontest-no-tert", "Set2", TRUE)
 
 
 prepare_for_cow <- function(plot) {
@@ -1309,7 +1309,7 @@ prepare_for_cow <- function(plot) {
   )
 }
 
-plot_legend <- get_legend(cs_dis_plot)
+
 
 plots <- list(cs_dis_plot, pan_can_tops_dis_plot, cs_test_plot, pan_can_tops_test_plot)
 prepared_plots <- lapply(plots, prepare_for_cow)
@@ -1338,6 +1338,8 @@ unique_mutations <- colormap_mutations[, .(mutation = unique(mutation))]
 uni_mut <- unique_mutations[, count := 0]
 uni_genes <- unique_genes[, count := 0]
 
+final_panel <- final_panel[cancer_type == "PAN-CAN", cancer_type := "PANCAN"]
+
 for (i in seq_len(nrow(final_panel))) {
   current_panel <- final_panel$panel[[i]][1:20]
   uni_mut[mutation %in% current_panel, count := count + 1]
@@ -1356,13 +1358,51 @@ top_ten_mut <- uni_mut[order(-count)][1:20]
 # Check in which top n panel do the genes/muts cover
 
 mutation_panel_hits <- data.table()
+mutation_panel_hits_complete <- data.table()
 for (i in seq_len(nrow(final_panel))) {
   current_panel <- final_panel$panel[[i]]
   current_cancer_type <- final_panel$cancer_type[i]
   hit <- top_ten_mut[mutation %in% current_panel]
+
   new_row <- data.table(mutation = hit$mutation, cancer_type = current_cancer_type, top_number = as.factor(sapply(match(hit$mutation, current_panel), round_up_custom)))
   mutation_panel_hits <- rbind(mutation_panel_hits, new_row)
 }
+
+
+# FIND FREQUENCY OF MUTATIONS IN EACH CANCER TYPE + PANCAN
+mutation_panel_hits <- mutation_panel_hits[, freq := 0]
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  current_mutations <- mutation_panel_hits[cancer_type == current_cancer_type]
+
+  raw_data <- patient_data_test[cancer_type == current_cancer_type]
+  total_patients <- length(raw_data[, unique(patient)])
+
+  mutated_patients <- raw_data[mutation %in% current_mutations$mutation]
+
+  mutation_fractions <- mutated_patients[, .(covered_patients = .N), by = mutation]
+  mutation_fractions <- mutation_fractions[, cancer_type := current_cancer_type]
+  mutation_fractions <- mutation_fractions[, freq := covered_patients / total_patients]
+
+  mutation_panel_hits <- mutation_panel_hits[mutation_fractions, on = .(mutation, cancer_type), freq := i.freq]
+}
+
+# For pan cancer
+current_cancer_type <- "PANCAN"
+current_mutations <- mutation_panel_hits[cancer_type == current_cancer_type]
+
+raw_data <- copy(patient_data_test)
+
+total_patients <- length(raw_data[, unique(patient)])
+
+mutated_patients <- raw_data[mutation %in% current_mutations$mutation]
+
+mutation_fractions <- mutated_patients[, .(covered_patients = .N), by = mutation]
+mutation_fractions <- mutation_fractions[, cancer_type := current_cancer_type]
+mutation_fractions <- mutation_fractions[, freq := covered_patients / total_patients]
+
+mutation_panel_hits <- mutation_panel_hits[mutation_fractions, on = .(mutation, cancer_type), freq := i.freq]
 
 missing_ct_mut <- setdiff(final_panel$cancer_type, mutation_panel_hits$cancer_type)
 placeholder_rows_mut <- data.table(mutation = mutation_panel_hits$mutation[1], cancer_type = missing_ct_mut, top_number = NA)
@@ -1380,30 +1420,81 @@ for (i in seq_len(nrow(final_panel_genes_nu))) {
   gene_panel_hits <- rbind(gene_panel_hits, new_row)
 }
 
+gene_panel_hits <- gene_panel_hits[, freq := 0]
+
+patient_data_test_gene <- unique(patient_data_test[, .(gene = tstrsplit(mutation, ",")[[1]]), by = .(patient, cancer_type)])
+
+for (i in seq_along(cancer_data$Study_Abbreviation)) {
+  current_cancer_type <- cancer_data$Study_Abbreviation[i]
+  current_genes <- gene_panel_hits[cancer_type == current_cancer_type]
+
+  raw_data <- patient_data_test_gene[cancer_type == current_cancer_type]
+  total_patients <- length(raw_data[, unique(patient)])
+
+  mutated_patients <- raw_data[gene %in% current_genes$gene]
+
+  gene_fractions <- mutated_patients[, .(covered_patients = .N), by = gene]
+  gene_fractions <- gene_fractions[, cancer_type := current_cancer_type]
+  gene_fractions <- gene_fractions[, freq := covered_patients / total_patients]
+
+  gene_panel_hits <- gene_panel_hits[gene_fractions, on = .(gene, cancer_type), freq := i.freq]
+}
+
+
+current_cancer_type <- "PANCAN"
+current_genes <- gene_panel_hits[cancer_type == current_cancer_type]
+
+raw_data <- copy(patient_data_test_gene)
+total_patients <- length(raw_data[, unique(patient)])
+
+mutated_patients <- raw_data[gene %in% current_genes$gene]
+
+gene_fractions <- mutated_patients[, .(covered_patients = .N), by = gene]
+gene_fractions <- gene_fractions[, cancer_type := current_cancer_type]
+gene_fractions <- gene_fractions[, freq := covered_patients / total_patients]
+
+gene_panel_hits <- gene_panel_hits[gene_fractions, on = .(gene, cancer_type), freq := i.freq]
+
+
 missing_ct_gene <- setdiff(final_panel$cancer_type, gene_panel_hits$cancer_type)
 placeholder_rows_gene <- data.table(gene = gene_panel_hits$gene[1], cancer_type = missing_ct_gene, top_number = NA)
 gene_panel_hits_complete <- rbind(gene_panel_hits, placeholder_rows_gene, fill = TRUE)
 
-# Gene-cancer heatmap
-gene_panel_hits_complete[order(gene)]
 
-gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(gene, cancer_type, fill = top_number)) +
+
+cs_test_panel_cov <- cs_test[[2]]$cancer_type
+levels_cs_test <- levels(cs_test_panel_cov)
+
+# Gene-cancer heatmap
+gene_panel_hits_complete[freq > 0, count := .N, by = gene]
+
+gene_panel_hits_complete[, cancer_type := factor(cancer_type, levels = levels_cs_test)]
+gene_panel_hits_complete[, gene := factor(gene, levels = unique(gene[order(count)]))]
+
+# # Top 10 only
+# gene_panel_hits_complete <- gene_panel_hits_complete[top_number == 10 | is.na(top_number)]
+# gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = freq)) +
+
+# All tops
+gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = top_number, alpha = freq)) +
   geom_tile(color = "white") +
   theme_minimal() +
-  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white") +
+  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white", guide = "none") +
+  scale_alpha_continuous(range = c(0, 1), name = "Frequency", trans = "log10") +
+  # scale_fill_distiller(palette = "RdPu", name = "Frequency", na.value = "white") +
   labs(
     x = "Cancer Type",
     y = "Gene"
   ) +
   theme(
-    legend.position = "none",
-    axis.text.x = element_text(size = 9),
-    axis.text.y = element_text(size = 9),
+    legend.position = "right",
+    axis.text.x = element_text(size = 10, , angle = 90, vjust = 0.35, hjust = 1),
+    axis.text.y = element_text(size = 10),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
     axis.title.x = element_text(size = 15, margin = margin(t = 20)),
-    axis.title.y = element_text(size = 15),
-    title = element_text(size = 15)
+    axis.title.y = element_text(size = 15, margin = margin(r = 20)),
+    title = element_text(size = 15),
   )
 
 pdf(glue("plots/{Sys.Date()}/gene-heatmap.pdf"), width = 17, height = 8.5)
@@ -1413,32 +1504,52 @@ dev.off()
 
 
 # Mutation-cancer heatmap
-mutation_panel_hits_complete[, mutation := gsub(" ", "\n", mutation)]
+# mutation_panel_hits_complete[, mutation := gsub(" ", "\n", mutation)]
 
-mutation_panel_hits_complete[order(mutation)]
+mutation_panel_hits_complete[freq > 0, count := .N, by = mutation]
 
-mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(mutation, cancer_type, fill = top_number)) +
+mutation_panel_hits_complete[, cancer_type := factor(cancer_type, levels = levels_cs_test)]
+
+mutation_panel_hits_complete[, mutation := factor(mutation, levels = unique(mutation[order(count)]))]
+
+# # Top 10 only
+# mutation_panel_hits_complete <- mutation_panel_hits_complete[top_number == 10 | is.na(top_number)]
+# mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = freq)) +
+
+# All tops
+mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = top_number, alpha = freq)) +
   geom_tile(color = "white") +
   theme_minimal() +
-  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white") +
+  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white", guide = "none") +
+  scale_alpha_continuous(range = c(0, 1), name = "Frequency", trans = "log10") +
+  # scale_fill_distiller(palette = "RdPu", name = "Frequency (Log)", na.value = "white", trans = "log10") +
   labs(
     x = "Cancer Type",
     y = "Mutations"
   ) +
   theme(
-    legend.position = "none",
-    axis.text.x = element_text(size = 8),
-    axis.text.y = element_text(size = 8),
+    legend.position = "right",
+    axis.text.x = element_text(size = 10, , angle = 90, vjust = 0.35, hjust = 1),
+    axis.text.y = element_text(size = 10),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
     axis.title.x = element_text(size = 15, margin = margin(t = 20)),
-    axis.title.y = element_text(size = 15),
+    axis.title.y = element_text(size = 15, margin = margin(r = 20)),
     title = element_text(size = 15),
   )
 
 pdf(glue("plots/{Sys.Date()}/mutation-heatmap.pdf"), width = 17, height = 8.5)
 mutation_colormap_plot
 dev.off()
+
+
+plot_legend <- get_legend(cs_dis_plot)
+mutation_freq_legend <- get_legend(mutation_colormap_plot)
+gene_freq_legend <- get_legend(gene_colormap_plot)
+
+gene_colormap_plot <- gene_colormap_plot + theme(legend.position = "none")
+mutation_colormap_plot <- mutation_colormap_plot + theme(legend.position = "none")
+
 
 # Add the heatmap below the combined plots - GENE
 added_gene_heatmap <- plot_grid(
@@ -1450,10 +1561,14 @@ pdf(glue("plots/{Sys.Date()}/bar-and-gene-heat.pdf"), width = 17, height = 17)
 grid.draw(added_gene_heatmap)
 dev.off()
 
+gene_legend <- plot_grid(
+  plot_legend, gene_freq_legend,
+  nrow = 2
+)
 
 # Add the legend to the right side of the combined plots
 added_legend_gene <- plot_grid(
-  added_gene_heatmap, plot_legend,
+  added_gene_heatmap, gene_legend,
   ncol = 2, rel_widths = c(7, 1), scale = 0.95
 )
 
@@ -1472,14 +1587,56 @@ grid.draw(added_mutation_heatmap)
 dev.off()
 
 
+mutation_legend <- plot_grid(
+  plot_legend, mutation_freq_legend,
+  nrow = 2
+)
+
 # Add the legend to the right side of the combined plots
 added_legend_mutation <- plot_grid(
-  added_mutation_heatmap, plot_legend,
+  added_mutation_heatmap, mutation_legend,
   ncol = 2, rel_widths = c(7, 1), scale = 0.95
 )
 
 pdf(glue("plots/{Sys.Date()}/bar-mutation-heat-legend.pdf"), width = 17, height = 17)
 grid.draw(added_legend_mutation)
+dev.off()
+
+
+prepared_test <- prepare_for_cow(cs_test_plot)
+
+prepared_test <- prepared_test + labs(y = "Percentage Coverage") + theme(axis.title.y = element_text(size = 15), plot.title = element_text(size = 20))
+
+# Final plot - test cs panel + heatmap
+# Mutation
+cs_panel_heat_mut <- plot_grid(
+  prepared_test, mutation_colormap_plot,
+  nrow = 2, scale = 0.97, align = "v"
+)
+
+final_plot <- plot_grid(
+  cs_panel_heat_mut, mutation_legend,
+  ncol = 2, rel_widths = c(7, 1), scale = 0.97
+)
+
+pdf(glue("plots/{Sys.Date()}/mutation-bar-heat-plot.pdf"), width = 18, height = 17)
+grid.draw(final_plot)
+dev.off()
+
+# Gene
+
+cs_panel_heat_gene <- plot_grid(
+  prepared_test, gene_colormap_plot,
+  nrow = 2, scale = 0.97, align = "v"
+)
+
+final_plot <- plot_grid(
+  cs_panel_heat_gene, gene_legend,
+  ncol = 2, rel_widths = c(7, 1), scale = 0.97
+)
+
+pdf(glue("plots/{Sys.Date()}/gene-bar-heat-plot.pdf"), width = 18, height = 17)
+grid.draw(final_plot)
 dev.off()
 ```
 
@@ -1526,8 +1683,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- copy(patient_data)
-patient_data_training <- add_tert(patient_data_training, FALSE)
-patient_data_test <- add_tert(patient_data_test, FALSE)
+patient_data_training <- unique(add_tert(patient_data_training, FALSE))
+patient_data_test <- unique(add_tert(patient_data_test, FALSE))
 
 # Generate pan can panel
 specific_patients <- copy(patient_data_training)
