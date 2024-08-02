@@ -455,7 +455,7 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
     theme_minimal() +
     theme(
       axis.text.y = element_text(size = 10),
-      axis.text.x = element_text(size = 10, angle = 90, vjust = 0.35, hjust = 1)
+      axis.text.x = element_text(size = 10, angle = 90, vjust = 0.25, hjust = 1)
     ) +
     scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
     scale_fill_brewer(palette = brewer_palette)
@@ -533,7 +533,8 @@ test_and_plot_pc <- function(panel, patient_data, plot_title, filename, brewer_p
     theme_minimal() +
     theme(
       axis.text.y = element_text(size = 7),
-      axis.text.x = element_text(size = 7, angle = 90, vjust = 0.5, hjust = 1)
+      axis.text.x = element_text(size = 7, angle = 90, vjust = 0.25, hjust = 1),
+      panel.grid.major.x = element_blank(),
     ) +
     scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
     scale_fill_brewer(palette = brewer_palette)
@@ -542,7 +543,7 @@ test_and_plot_pc <- function(panel, patient_data, plot_title, filename, brewer_p
   print(plot)
   dev.off()
 
-  return(plot)
+  return(list(plot, panel_coverage))
 }
 ```
 
@@ -1781,45 +1782,148 @@ final_panel_tops <- final_panel_tops[, .(panel = list(mutation))]
 # pan_can_unopt_test_plot <- test_and_plot_pc(final_panel_raw, patient_data_test, "Pan-Cancer Panel (Greedy, On Test)", "pan-can-greedy-cved-ontest", "Set2")
 # pan_can_opt_dis_plot <- test_and_plot_pc(final_panel, patient_data_training, "Pan-Cancer Panel (Greedy, On Discovery, Optimized)", "pan-can-greedy-cved-opt-ondis", "Set2")
 # pan_can_opt_test_plot <- test_and_plot_pc(final_panel, patient_data_test, "Pan-Cancer Panel (Greedy, On Test, Optimized)", "pan-can-greedy-cved-opt-ontest", "Set2")
-pan_can_tops_dis_plot <- test_and_plot_pc(final_panel_tops, patient_data_training, "Pan-Cancer Panel (On Discovery)", "pan-can-tops-cved-ondis", "Set2")
-pan_can_tops_test_plot <- test_and_plot_pc(final_panel_tops, patient_data_test, "Pan-Cancer Panel (On Test)", "pan-can-tops-cved-ontest", "Set2")
+pc_tops_dis <- test_and_plot_pc(final_panel_tops, patient_data_training, "Pan-Cancer Panel (On Discovery)", "pan-can-tops-cved-ondis", "Set2")
+pc_tops_test <- test_and_plot_pc(final_panel_tops, patient_data_test, "Pan-Cancer Panel (On Test)", "pan-can-tops-cved-ontest", "Set2")
+pan_can_tops_dis_plot <- pc_tops_dis[[1]]
+pan_can_tops_test_plot <- pc_tops_test[[1]]
 
-prepare_for_cow <- function(plot) {
-  plot + theme(
-    legend.position = "none",
-    axis.title = element_blank(),
-    plot.title = element_text(size = 10),
-    panel.grid.major.x = element_blank(),
-    panel.grid.minor.y = element_blank()
-  )
+
+cancer_incidence_raw <- fread("csv-data/cancer_incidence_acs.csv")
+cancer_incidence <- cancer_incidence_raw[!is.na(new_cases)]
+
+pc_cov_base <- copy(pc_tops_test[[2]])
+
+pc_cov_base[cancer_incidence, on = .(cancer_type), covered := round(i.new_cases * coverage / 100)]
+
+total_us_patients <- cancer_incidence[, sum(new_cases)]
+pc_cov_acs <- pc_cov_base[, sum_covered := sum(covered, na.rm = TRUE), by = top_number]
+
+covered_us_patients <- pc_cov_acs[, .(top_number, covered = sum_covered)]
+covered_us_patients <- unique(covered_us_patients)
+covered_us_patients[, fraction_covered := 100 * covered / total_us_patients]
+
+for (i in seq_along(covered_us_patients$top_number)) {
+  current_top_num <- covered_us_patients$top_number[i]
+  pc_cov_acs[cancer_type == "PANCAN" & top_number == current_top_num, coverage := covered_us_patients$fraction_covered[i]]
 }
 
-plot_legend <- get_legend(pan_can_tops_test_plot)
+# Plot
+pc_cov_acs <- pc_cov_acs[order(-coverage, top_number)]
 
-plots <- list(pan_can_unopt_dis_plot, pan_can_opt_dis_plot, pan_can_tops_dis_plot, pan_can_unopt_test_plot, pan_can_opt_test_plot, pan_can_tops_test_plot)
-prepared_plots <- lapply(plots, prepare_for_cow)
+pc_cov_acs[, cancer_type := factor(cancer_type, levels = unique(cancer_type))]
+pc_cov_acs[, top_number := factor(top_number, levels = unique(top_number))]
 
-combined_plots <- plot_grid(
-  plotlist = prepared_plots,
-  align = "vh", axis = "tb", ncol = 3
-)
+pc_cov_acs_plot <- ggplot(pc_cov_acs, aes(x = cancer_type, y = coverage, fill = top_number)) +
+  geom_bar(stat = "identity", position = "identity", width = 0.9) +
+  labs(title = "Pan-Cancer Panel Coverage (Actual Pan-Can Freq)", x = "Cancer Type", y = "Percentage Coverage", fill = "Number of\nTop Mutations") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10, angle = 90, vjust = 0.25, hjust = 1)
+  ) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_fill_brewer(palette = "Set2")
 
-# Add the legend to the right side of the combined plots
-pan_can_cow <- plot_grid(
-  combined_plots, plot_legend,
-  ncol = 2, rel_widths = c(6, 1)
-)
-
-# Create common x and y labels
-y.grob <- textGrob("Percentage Coverage", gp = gpar(fontsize = 15), rot = 90)
-x.grob <- textGrob("Cancer Type", gp = gpar(fontsize = 15))
-
-# Arrange the combined plot and labels
-final_plot_pc <- arrangeGrob(pan_can_cow, left = y.grob, bottom = x.grob)
-
-pdf(glue("plots/{Sys.Date()}/pan-can-cowplot.pdf"), width = 17, height = 8.5)
-grid.draw(final_plot_pc)
+pdf(glue("plots/{Sys.Date()}/pan-can-panel-actual-freq.pdf"))
+print(pc_cov_acs_plot)
 dev.off()
+
+# CAreful with these guys
+plot_legend <- get_legend(pc_cov_acs_plot)
+
+mutation_freq_legend <- get_legend(mutation_colormap_plot)
+gene_freq_legend <- get_legend(gene_colormap_plot)
+
+gene_colormap_plot <- gene_colormap_plot + theme(legend.position = "none")
+mutation_colormap_plot <- mutation_colormap_plot + theme(legend.position = "none")
+pc_cov_acs_plot <- pc_cov_acs_plot + theme(legend.position = "none")
+
+
+gene_legend <- plot_grid(
+  plot_legend, gene_freq_legend,
+  nrow = 2
+)
+
+
+mutation_legend <- plot_grid(
+  plot_legend, mutation_freq_legend,
+  nrow = 2
+)
+
+prepared_test <- prepare_for_cow(pc_cov_acs_plot)
+
+prepared_test <- prepared_test + labs(y = "Percentage Coverage") + theme(axis.title.y = element_text(size = 15), plot.title = element_text(size = 20))
+
+# Final plot - test pc panel + heatmap
+# Mutation
+cs_panel_heat_mut <- plot_grid(
+  prepared_test, mutation_colormap_plot,
+  nrow = 2, scale = 0.97, align = "v"
+)
+
+final_plot <- plot_grid(
+  cs_panel_heat_mut, mutation_legend,
+  ncol = 2, rel_widths = c(7, 1), scale = 0.97
+)
+
+pdf(glue("plots/{Sys.Date()}/mutation-bar-heat-pancan-alltops.pdf"), width = 18, height = 17)
+grid.draw(final_plot)
+dev.off()
+
+# Gene
+
+cs_panel_heat_gene <- plot_grid(
+  prepared_test, gene_colormap_plot,
+  nrow = 2, scale = 0.97, align = "v"
+)
+
+final_plot <- plot_grid(
+  cs_panel_heat_gene, gene_legend,
+  ncol = 2, rel_widths = c(7, 1), scale = 0.97
+)
+
+pdf(glue("plots/{Sys.Date()}/gene-bar-heat-pancan-alltops.pdf"), width = 18, height = 17)
+grid.draw(final_plot)
+dev.off()
+
+
+
+# prepare_for_cow <- function(plot) {
+#   plot + theme(
+#     legend.position = "none",
+#     axis.title = element_blank(),
+#     plot.title = element_text(size = 10),
+#     panel.grid.major.x = element_blank(),
+#     panel.grid.minor.y = element_blank()
+#   )
+# }
+
+# plot_legend <- get_legend(pan_can_tops_test_plot)
+
+# plots <- list(pan_can_unopt_dis_plot, pan_can_opt_dis_plot, pan_can_tops_dis_plot, pan_can_unopt_test_plot, pan_can_opt_test_plot, pan_can_tops_test_plot)
+# prepared_plots <- lapply(plots, prepare_for_cow)
+
+# combined_plots <- plot_grid(
+#   plotlist = prepared_plots,
+#   align = "vh", axis = "tb", ncol = 3
+# )
+
+# # Add the legend to the right side of the combined plots
+# pan_can_cow <- plot_grid(
+#   combined_plots, plot_legend,
+#   ncol = 2, rel_widths = c(6, 1)
+# )
+
+# # Create common x and y labels
+# y.grob <- textGrob("Percentage Coverage", gp = gpar(fontsize = 15), rot = 90)
+# x.grob <- textGrob("Cancer Type", gp = gpar(fontsize = 15))
+
+# # Arrange the combined plot and labels
+# final_plot_pc <- arrangeGrob(pan_can_cow, left = y.grob, bottom = x.grob)
+
+# pdf(glue("plots/{Sys.Date()}/pan-can-cowplot.pdf"), width = 17, height = 8.5)
+# grid.draw(final_plot_pc)
+# dev.off()
 ```
 
 
