@@ -1180,6 +1180,8 @@ dev.off()
 ```
 
 ```{r top-mutations-cross-validation}
+# NEED TO RUN THE CHUNK BELOW FIRST (pan-can one)
+
 cv_fraction <- 0.6
 
 cancer_data <- as.data.frame(tcga_available())
@@ -1223,8 +1225,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- copy(patient_data)
-patient_data_training <- unique(add_tert(patient_data_training, FALSE))
-patient_data_test <- unique(add_tert(patient_data_test, FALSE))
+patient_data_training <- unique(add_tert(patient_data_training, TRUE))
+patient_data_test <- unique(add_tert(patient_data_test, TRUE))
 
 
 # Generate pan can panel
@@ -1472,17 +1474,17 @@ gene_panel_hits_complete[freq > 0, count := .N, by = gene]
 gene_panel_hits_complete[, cancer_type := factor(cancer_type, levels = levels_cs_test)]
 gene_panel_hits_complete[, gene := factor(gene, levels = unique(gene[order(count)]))]
 
-# # Top 10 only
-# gene_panel_hits_complete <- gene_panel_hits_complete[top_number == 10 | is.na(top_number)]
-# gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = freq)) +
+# Top 10 only
+gene_panel_hits_complete <- gene_panel_hits_complete[top_number == 10 | is.na(top_number)]
+gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = freq)) +
 
-# All tops
-gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = top_number, alpha = freq)) +
+  # # All tops
+  # gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = top_number, alpha = freq)) +
   geom_tile(color = "white") +
   theme_minimal() +
-  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white", guide = "none") +
-  scale_alpha_continuous(range = c(0, 1), name = "Frequency", trans = "log10") +
-  # scale_fill_distiller(palette = "RdPu", name = "Frequency", na.value = "white") +
+  # scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white", guide = "none") +
+  # scale_alpha_continuous(range = c(0, 1), name = "Frequency", trans = "log10") +
+  scale_fill_distiller(palette = "RdPu", name = "Frequency", na.value = "white", direction = 1) +
   labs(
     x = "Cancer Type",
     y = "Gene"
@@ -1513,17 +1515,17 @@ mutation_panel_hits_complete[, cancer_type := factor(cancer_type, levels = level
 
 mutation_panel_hits_complete[, mutation := factor(mutation, levels = unique(mutation[order(count)]))]
 
-# # Top 10 only
-# mutation_panel_hits_complete <- mutation_panel_hits_complete[top_number == 10 | is.na(top_number)]
-# mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = freq)) +
+# Top 10 only
+mutation_panel_hits_complete <- mutation_panel_hits_complete[top_number == 10 | is.na(top_number)]
+mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = freq)) +
 
-# All tops
-mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = top_number, alpha = freq)) +
+  # # All tops
+  # mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = top_number, alpha = freq)) +
   geom_tile(color = "white") +
   theme_minimal() +
-  scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white", guide = "none") +
-  scale_alpha_continuous(range = c(0, 1), name = "Frequency", trans = "log10") +
-  # scale_fill_distiller(palette = "RdPu", name = "Frequency (Log)", na.value = "white", trans = "log10") +
+  # scale_fill_brewer(palette = "Set2", direction = -1, na.value = "white", guide = "none") +
+  # scale_alpha_continuous(range = c(0, 1), name = "Frequency", trans = "log10") +
+  scale_fill_distiller(palette = "RdPu", name = "Frequency (Log)", na.value = "white", trans = "log10", direction = 1) +
   labs(
     x = "Cancer Type",
     y = "Mutations"
@@ -1684,8 +1686,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- copy(patient_data)
-patient_data_training <- unique(add_tert(patient_data_training, FALSE))
-patient_data_test <- unique(add_tert(patient_data_test, FALSE))
+patient_data_training <- unique(add_tert(patient_data_training, TERT))
+patient_data_test <- unique(add_tert(patient_data_test, TERT))
 
 # Generate pan can panel
 specific_patients <- copy(patient_data_training)
@@ -1866,7 +1868,7 @@ final_plot <- plot_grid(
   ncol = 2, rel_widths = c(7, 1), scale = 0.97
 )
 
-pdf(glue("plots/{Sys.Date()}/mutation-bar-heat-pancan-alltops.pdf"), width = 18, height = 17)
+pdf(glue("plots/{Sys.Date()}/mutation-bar-heat-pancan-topten.pdf"), width = 18, height = 17)
 grid.draw(final_plot)
 dev.off()
 
@@ -1882,7 +1884,7 @@ final_plot <- plot_grid(
   ncol = 2, rel_widths = c(7, 1), scale = 0.97
 )
 
-pdf(glue("plots/{Sys.Date()}/gene-bar-heat-pancan-alltops.pdf"), width = 18, height = 17)
+pdf(glue("plots/{Sys.Date()}/gene-bar-heat-pancan-topten.pdf"), width = 18, height = 17)
 grid.draw(final_plot)
 dev.off()
 
