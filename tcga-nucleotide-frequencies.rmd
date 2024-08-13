@@ -14,7 +14,6 @@ knitr::opts_chunk$set(
 )
 
 BiocManager::install("PoisonAlien/TCGAmutations")
-install.packages("profvis")
 
 library(TCGAmutations)
 library(viridis)
@@ -455,7 +454,7 @@ test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_p
     theme_minimal() +
     theme(
       axis.text.y = element_text(size = 10),
-      axis.text.x = element_text(size = 10, angle = 90, vjust = 0.25, hjust = 1)
+      axis.text.x = element_text(size = 10, angle = 90, vjust = 0.25, hjust = 1),
     ) +
     scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
     scale_fill_brewer(palette = brewer_palette)
@@ -1183,6 +1182,7 @@ dev.off()
 # NEED TO RUN THE CHUNK BELOW FIRST (pan-can one)
 
 cv_fraction <- 0.6
+TERT <- FALSE
 
 cancer_data <- as.data.frame(tcga_available())
 
@@ -1225,8 +1225,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
 }
 
 patient_mutation <- copy(patient_data)
-patient_data_training <- unique(add_tert(patient_data_training, TRUE))
-patient_data_test <- unique(add_tert(patient_data_test, TRUE))
+patient_data_training <- unique(add_tert(patient_data_training, TERT))
+patient_data_test <- unique(add_tert(patient_data_test, TERT))
 
 
 # Generate pan can panel
@@ -1308,11 +1308,12 @@ prepare_for_cow <- function(plot) {
     axis.title = element_blank(),
     plot.title = element_text(size = 10),
     panel.grid.major.x = element_blank(),
-    panel.grid.minor.y = element_blank()
-  )
+    panel.grid.minor.y = element_blank(),
+    axis.text.x = element_text(size = 8), 
+  ) 
 }
 
-
+cs_dis_plot_copy <- copy(cs_dis_plot)
 
 plots <- list(cs_dis_plot, pan_can_tops_dis_plot, cs_test_plot, pan_can_tops_test_plot)
 prepared_plots <- lapply(plots, prepare_for_cow)
@@ -1476,6 +1477,11 @@ gene_panel_hits_complete[, gene := factor(gene, levels = unique(gene[order(count
 
 # Top 10 only
 gene_panel_hits_complete <- gene_panel_hits_complete[top_number == 10 | is.na(top_number)]
+
+missing_ct_gene <- setdiff(final_panel$cancer_type, gene_panel_hits_complete$cancer_type)
+placeholder_rows_gene <- data.table(gene = gene_panel_hits_complete$gene[1], cancer_type = missing_ct_gene, top_number = NA)
+gene_panel_hits_complete <- rbind(gene_panel_hits_complete, placeholder_rows_gene, fill = TRUE)
+
 gene_colormap_plot <- ggplot(gene_panel_hits_complete, aes(cancer_type, gene, fill = freq)) +
 
   # # All tops
@@ -1517,6 +1523,11 @@ mutation_panel_hits_complete[, mutation := factor(mutation, levels = unique(muta
 
 # Top 10 only
 mutation_panel_hits_complete <- mutation_panel_hits_complete[top_number == 10 | is.na(top_number)]
+
+missing_ct_mut <- setdiff(final_panel$cancer_type, mutation_panel_hits_complete$cancer_type)
+placeholder_rows_mut <- data.table(mutation = mutation_panel_hits_complete$mutation[1], cancer_type = missing_ct_mut, top_number = NA)
+mutation_panel_hits_complete <- rbind(mutation_panel_hits_complete, placeholder_rows_mut, fill = TRUE)
+
 mutation_colormap_plot <- ggplot(mutation_panel_hits_complete, aes(cancer_type, mutation, fill = freq)) +
 
   # # All tops
@@ -1545,13 +1556,46 @@ pdf(glue("plots/{Sys.Date()}/mutation-heatmap.pdf"), width = 17, height = 8.5)
 mutation_colormap_plot
 dev.off()
 
+cs_dis_plot_copy <- cs_dis_plot_copy + theme(
+  legend.text = element_text(size = 20),   
+  legend.title = element_text(size = 23),  
+  legend.key.size = unit(1.25, "cm")  
+) 
 
-plot_legend <- get_legend(cs_dis_plot)
-mutation_freq_legend <- get_legend(mutation_colormap_plot)
-gene_freq_legend <- get_legend(gene_colormap_plot)
+plot_legend <- get_legend(cs_dis_plot_copy)
 
-gene_colormap_plot <- gene_colormap_plot + theme(legend.position = "none")
-mutation_colormap_plot <- mutation_colormap_plot + theme(legend.position = "none")
+mutation_colormap_copy <- copy(mutation_colormap_plot)
+gene_colormap_copy <- copy(gene_colormap_plot)
+
+mutation_colormap_copy <- mutation_colormap_copy + theme(
+  legend.text = element_text(size = 20),   
+  legend.title = element_text(size = 23),  
+  legend.key.size = unit(1.25, "cm")  
+) 
+
+gene_colormap_copy <- gene_colormap_copy + theme(
+  legend.text = element_text(size = 20),   
+  legend.title = element_text(size = 23),  
+  legend.key.size = unit(1.25, "cm")  
+) 
+
+mutation_freq_legend <- get_legend(mutation_colormap_copy)
+gene_freq_legend <- get_legend(gene_colormap_copy)
+
+gene_colormap_plot <- gene_colormap_plot + theme(
+  legend.position = "none", 
+  axis.text.x = element_text(size = 18), 
+  axis.text.y = element_text(size = 18),
+  axis.title.y = element_text(size = 25),
+  axis.title.x = element_text(size = 25)
+  )
+mutation_colormap_plot <- mutation_colormap_plot + theme(
+  legend.position = "none", 
+  axis.text.x = element_text(size = 18), 
+  axis.text.y = element_text(size = 18),
+  axis.title.y = element_text(size = 25),
+  axis.title.x = element_text(size = 25)
+  )
 
 
 # Add the heatmap below the combined plots - GENE
@@ -1608,7 +1652,12 @@ dev.off()
 
 prepared_test <- prepare_for_cow(cs_test_plot)
 
-prepared_test <- prepared_test + labs(y = "Percentage Coverage") + theme(axis.title.y = element_text(size = 15), plot.title = element_text(size = 20))
+prepared_test <- prepared_test + labs(y = "Percentage Coverage") + theme(
+    axis.title.y = element_text(size = 25), 
+    plot.title = element_text(size = 30), 
+    axis.text.x = element_text(size = 18),
+    axis.text.y = element_text(size = 18)
+)
 
 # Final plot - test cs panel + heatmap
 # Mutation
@@ -1626,6 +1675,12 @@ pdf(glue("plots/{Sys.Date()}/mutation-bar-heat-plot.pdf"), width = 18, height = 
 grid.draw(final_plot)
 dev.off()
 
+png(glue("plots/{Sys.Date()}/mutation-bar-heat-plot.png"), width = 1333, height = 1250)
+grid.draw(final_plot)
+dev.off()
+
+
+
 # Gene
 
 cs_panel_heat_gene <- plot_grid(
@@ -1641,10 +1696,15 @@ final_plot <- plot_grid(
 pdf(glue("plots/{Sys.Date()}/gene-bar-heat-plot.pdf"), width = 18, height = 17)
 grid.draw(final_plot)
 dev.off()
+
+png(glue("plots/{Sys.Date()}/gene-bar-heat-plot.png"), width = 1333, height = 1250)
+grid.draw(final_plot)
+dev.off()
 ```
 
 ```{r cv-pan-cancer}
 cv_fraction <- 0.6
+TERT <- FALSE
 
 # Split the dataset
 cancer_data <- as.data.frame(tcga_available())
