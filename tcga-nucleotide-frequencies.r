@@ -1,18 +1,3 @@
----
-title: "Most Common Mutations in Each Cancer Type (and Pan Cancer)"
-output: rmarkdown::html_vignette
-vignette: >
-  %\VignetteIndexEntry{Vignette Title}
-  %\VignetteEngine{knitr::rmarkdown}
-  %\VignetteEncoding{UTF-8}
----
-
-```{r setup, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>"
-)
-
 BiocManager::install("PoisonAlien/TCGAmutations")
 
 library(TCGAmutations)
@@ -39,10 +24,7 @@ plot_dir <- file.path("plots", today_date)
 if (!file.exists(plot_dir)) {
   dir.create(plot_dir, recursive = TRUE)
 }
-```
 
-
-```{r load-mutations}
 library(dplyr)
 library(tidyverse)
 
@@ -105,9 +87,8 @@ for (i in seq_along(cancer_data$Study_Abbreviation)) {
   cancer_dfs <- cancer_dfs %>% add_row(cancer_name, data = list(df_merged_trunc))
   cancer_dfs_facet <- cancer_dfs_facet %>% add_row(cancer_name, data = list(df_merged_trunc_facet))
 }
-```
 
-```{r plot-graphs, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+
 library(ggplot2)
 library(purrr)
 library(gridExtra)
@@ -127,9 +108,8 @@ plots <- pmap(cancer_dfs, function(cancer_name, data) {
 })
 
 plots
-```
 
-```{r plot-facets, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+
 library(tidyverse)
 library(tidytext)
 library(glue)
@@ -175,9 +155,8 @@ for (i in seq_along(facet_plots)) {
 }
 
 print(facet_plots[[i]])
-```
 
-```{r plot-one-facet, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+
 library(tidytext)
 
 list_of_tibbles <- cancer_dfs_facet$data
@@ -200,9 +179,8 @@ pdf("plots/one_plot.pdf")
 
 one_plot
 dev.off()
-```
 
-```{r top_ten}
+
 library(tidytext)
 library(data.table)
 
@@ -247,10 +225,8 @@ pdf(glue("plots/{Sys.Date()}/top_ten_oneplot.pdf"))
 
 top_ten_oneplot
 dev.off()
-```
 
 
-```{r greedy-algo}
 greedy_panel_curator <- function(patient_data, top_number) {
   panel <- data.table()
 
@@ -280,10 +256,8 @@ greedy_panel_curator <- function(patient_data, top_number) {
 
   return(panel)
 }
-```
 
 
-```{r add-tert}
 # Liver HCC 60% - LIHC
 # Kidney RCC 5% - KICH, KIRC
 # Skin-Melanoma 69% - SKCM
@@ -339,9 +313,8 @@ add_tert <- function(patient_mutation, add_yes) {
     return(patient_mutation)
   }
 }
-```
 
-```{r useful-functions}
+
 cbind_fill <- function(..., fill = NA) {
   # Get the list of data tables
   nm <- list(...)
@@ -387,9 +360,8 @@ round_up_custom <- function(x) {
     return(100)
   }
 }
-```
 
-```{r test-and-plot-functions}
+
 # Cancer specific
 test_and_plot_cs <- function(panel, patient_data, plot_title, filename, brewer_palette, pan_can_yes) {
   # Get coverages
@@ -548,9 +520,8 @@ test_and_plot_pc <- function(panel, patient_data, plot_title, filename, brewer_p
 
   return(list(plot, panel_coverage))
 }
-```
 
-```{r cancer-specific-panel}
+
 library(data.table)
 library(TCGAmutations)
 
@@ -628,9 +599,8 @@ cancer_specific_panel_plot <- ggplot(cancer_specific_coverage, aes(x = cancer_ty
 pdf("plots/cancer-specific-panel-coverage-greedy-new.pdf")
 cancer_specific_panel_plot
 dev.off()
-```
 
-```{r pan-cancer-panel}
+
 top_nums <- c(10, 20, 50, 100)
 pan_can_coverage <- data.table(cancer_type = character(), coverage = numeric(), top_number = integer())
 pan_can_panel <- data.table(top_number = integer(), panel = list())
@@ -732,10 +702,8 @@ pan_can_panel_plot <- ggplot(pan_can_coverage, aes(x = cancer_type, y = coverage
 pdf("plots/pan-can-panel-coverage-greedy-new.pdf")
 pan_can_panel_plot
 dev.off()
-```
 
 
-```{r cv-cancer-specific}
 cv_fraction <- 0.6
 
 # Split the dataset
@@ -1180,9 +1148,8 @@ final_unopt_plots <- arrangeGrob(unopt_plots, left = y.grob, bottom = x.grob)
 pdf("plots/unopt-vs-opt-cs-panel.pdf")
 grid.draw(final_unopt_plots)
 dev.off()
-```
 
-```{r top-mutations-cross-validation}
+
 # NEED TO RUN THE CHUNK BELOW FIRST (pan-can one)
 
 cv_fraction <- 0.6
@@ -1704,9 +1671,8 @@ dev.off()
 png(glue("plots/{Sys.Date()}/gene-bar-heat-plot.png"), width = 1333, height = 1250)
 grid.draw(final_plot)
 dev.off()
-```
 
-```{r cv-pan-cancer}
+
 cv_fraction <- 0.6
 TERT <- FALSE
 
@@ -1990,10 +1956,8 @@ dev.off()
 # pdf(glue("plots/{Sys.Date()}/pan-can-cowplot.pdf"), width = 17, height = 8.5)
 # grid.draw(final_plot_pc)
 # dev.off()
-```
 
 
-```{r summary-stats}
 library(viridis)
 library(tidytext)
 library(data.table)
@@ -2176,10 +2140,8 @@ coverage_per_cancer_plot <- ggplot(coverage_per_cancer, aes(x = cancer_type, y =
 pdf("plots/coverage_per_cancer_plot.pdf")
 coverage_per_cancer_plot
 dev.off()
-```
 
 
-```{r pie_chart}
 # # Create plot
 # ggplot(combined_data, aes(x = reorder_within(mutation, freq, cancer_type), y = freq)) + # nolint: object_usage_linter.
 #   geom_bar(stat = "identity", fill = "blue", width = 0.9) +
@@ -2226,9 +2188,8 @@ dev.off()
 # pdf("plots/cumulative_freq_plot.pdf")
 # cumulative_freq_plot
 # dev.off()
-```
 
-```{r pan-cancer-data}
+
 # Get all cancer types
 cancer_types <- unique(cancer_data$Study_Abbreviation)
 
@@ -2243,10 +2204,8 @@ load_mutations <- function(cancer_type) {
 pan_cancer_list <- lapply(cancer_types, load_mutations)
 
 pan_cancer_df <- bind_rows(pan_cancer_list)
-```
 
 
-```{r clean-pan-cancer-data}
 nucleotide_changes <- pan_cancer_df[, c("Hugo_Symbol", "HGVSc", "cancer_type")]
 
 tumor_samples <- pan_cancer_df[, c("Tumor_Sample_Barcode")]
@@ -2374,9 +2333,8 @@ coverage_within_cancer_plot <- ggplot(pan_can_tops, aes(x = cancer_type, y = cov
 pdf("plots/pan-can_panel_coverage.pdf")
 coverage_within_cancer_plot
 dev.off()
-```
 
-```{r plot-pan-cancer, fig.width=20, fig.height=14, out.width='100%', dpi=150}
+
 pancan_plot <- ggplot(data = df_merged_trunc, aes(x = mutation, y = freq)) +
   geom_bar(stat = "identity", fill = "blue") +
   geom_text(aes(label = round(freq, 3)), size = 3.5, hjust = 1.2, color = "white") +
@@ -2388,9 +2346,9 @@ pdf("plots/pancan_plot.pdf")
 
 pancan_plot
 dev.off()
-```
 
-```{r diagnostic-plots}
+
+
 # Diagnostic plots - distribution of hits
 library(glue)
 
@@ -2477,9 +2435,9 @@ for (num in top_nums) {
   print(distribution_plot)
   dev.off()
 }
-```
 
-```{r debug}
+
+
 # Coverage within cancer types
 cancer_data <- as.data.frame(tcga_available())
 
@@ -2703,4 +2661,4 @@ coverage_within_cancer_plot <- ggplot(pan_can_tops, aes(x = cancer_type, y = cov
 pdf("plots/pan-can_panel_ucec.pdf")
 coverage_within_cancer_plot
 dev.off()
-```
+
